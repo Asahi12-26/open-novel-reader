@@ -173,6 +173,19 @@ async function saveAttributions(chapter: Chapter, candidates: DialogueCandidate[
     });
   }
 }
+/** Atomic across tabs: simultaneous retries cannot each spend the same remaining task allowance. */
+export async function reserveAnalysisBudget(jobId: string, signature: string, amountUsd: number, budgetUsd: number): Promise<number> {
+  if (!Number.isFinite(amountUsd) || amountUsd <= 0 || !Number.isFinite(budgetUsd) || budgetUsd <= 0 || budgetUsd > 10) throw new Error('费用额度无效。');
+  return db.transaction('rw', db.settings, async () => {
+    const id = `analysis-reservation:${jobId}`;
+    const current = (await db.settings.get(id))?.value as { signature: string; reservedUsd: number } | undefined;
+    if (current && (current.signature !== signature || !Number.isFinite(current.reservedUsd) || current.reservedUsd < 0)) throw new Error('任务预算记录不匹配或损坏。');
+    const reservedUsd = (current?.reservedUsd || 0) + amountUsd;
+    if (reservedUsd > budgetUsd) throw new Error('已达到任务预算上限。重试也会计入已保留的费用额度。');
+    await db.settings.put({ id, value: { signature, reservedUsd } });
+    return reservedUsd;
+  });
+}
 /** Starts only with explicit authorization. Each retry must supply a new authorized:true call. */
 export function analyzeChapter(options: AnalysisOptions): AnalysisController {
   let paused = false; let cancelled = false; let wake: (() => void) | undefined;
@@ -196,7 +209,6 @@ export function analyzeChapter(options: AnalysisOptions): AnalysisController {
     const signature = JSON.stringify({ model: options.model, paragraphs: chapter.paragraphs });
     const persisted = (await db.settings.get(`analysis-reservation:${id}`))?.value as { signature: string; reservedUsd: number } | undefined;
     if (previous && (previous.bookId !== chapter.bookId || previous.chapterId !== chapter.id || persisted?.signature !== signature)) throw new Error('任务与当前章节不匹配，请新建分析任务。');
-    let reservedUsd = persisted?.reservedUsd || 0;
     let job: AnalysisJob = { id, bookId: chapter.bookId, chapterId: chapter.id, status: 'queued', completedChunks: previous?.completedChunks || 0, totalChunks: chunks.length, updatedAt: Date.now() };
     const update = async (changes: Partial<AnalysisJob>) => { job = { ...job, ...changes, updatedAt: Date.now() }; await db.jobs.put(job); options.onProgress?.({ ...job }); };
     await update({ status: 'running' });
@@ -207,10 +219,8 @@ export function analyzeChapter(options: AnalysisOptions): AnalysisController {
         if (cancelled) break;
         const known = await db.characters.where('bookId').equals(chapter.bookId).toArray();
         const reservation = chunkCost(chapter, chunks[i], options.model, known).usd;
-        if (reservedUsd + reservation > options.budgetUsd) throw new Error('已达到任务预算上限。重试也会计入已保留的费用额度。');
-        reservedUsd += reservation;
         // Reserve before sending. Even a timeout may be billed, so never reclaim this reservation automatically.
-        await db.settings.put({ id: `analysis-reservation:${id}`, value: { signature, reservedUsd } });
+        await reserveAnalysisBudget(id, signature, reservation, options.budgetUsd);
         abort = new AbortController();
         await update({ status: 'running' });
         const result = await callProxy({ action: 'analyze', authorized: true, model: options.model, maxTokens: OUTPUT_LIMIT,

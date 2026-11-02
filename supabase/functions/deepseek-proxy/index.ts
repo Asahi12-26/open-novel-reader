@@ -1,4 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { readBoundedJSON } from '../_shared/bounded-request.ts';
 
 // No service-role key. Requests are authenticated independently of CORS/platform JWT checks.
 // API keys live only in this invocation, are never stored, and must never be logged.
@@ -6,7 +7,7 @@ const rates: Record<string, { input: number; output: number }> = {
   'deepseek-flash': { input: 0.30, output: 1.20 },
   'deepseek-v4-pro': { input: 1.32, output: 3.96 },
 };
-const origins = (Deno.env.get('ALLOWED_ORIGINS') || 'http://localhost:1420,http://127.0.0.1:1420,http://tauri.localhost,tauri://localhost').split(',').map(s => s.trim()).filter(Boolean);
+const origins = (Deno.env.get('ALLOWED_ORIGINS') || 'http://localhost:1420,http://127.0.0.1:1420,https://tauri.localhost,http://tauri.localhost,tauri://localhost').split(',').map(s => s.trim()).filter(Boolean);
 const encoder = new TextEncoder();
 Deno.serve(async req => {
   const origin = req.headers.get('origin');
@@ -25,19 +26,19 @@ Deno.serve(async req => {
   });
   const { data, error } = await supabase.auth.getUser(auth.slice(7));
   if (error || !data.user) return reply({ error: 'AUTH_REQUIRED' }, 401);
-  let body;
+  let parsed;
   try {
-    const raw = await req.text();
-    if (encoder.encode(raw).length > 160000) return reply({ error: 'REQUEST_TOO_LARGE' }, 413);
-    body = JSON.parse(raw);
-  } catch { return reply({ error: 'INVALID_JSON' }, 400); }
+    parsed = await readBoundedJSON(req, 160000);
+  } catch (error) { return error instanceof Error && error.message === 'REQUEST_TOO_LARGE' ? reply({ error: 'REQUEST_TOO_LARGE' }, 413) : reply({ error: 'INVALID_JSON' }, 400); }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return reply({ error: 'INVALID_JSON_OBJECT' }, 400);
+  const body = parsed as Record<string, unknown>;
   if (typeof body.apiKey !== 'string' || body.apiKey.length < 10 || body.apiKey.length > 256 || /[\r\n]/.test(body.apiKey)) return reply({ error: 'INVALID_KEY' }, 400);
   if (body.action !== 'models' && body.action !== 'analyze') return reply({ error: 'INVALID_ACTION' }, 400);
   let upstreamBody: string | undefined;
   if (body.action === 'analyze') {
     if (body.authorized !== true) return reply({ error: 'CONSENT_REQUIRED' }, 403);
-    const rate = rates[body.model];
-    if (!rate || !Number.isInteger(body.maxTokens) || body.maxTokens < 1 || body.maxTokens > 4096 || typeof body.system !== 'string' || body.system.length > 4000 || !body.input || typeof body.input !== 'object') return reply({ error: 'INVALID_ANALYSIS' }, 400);
+    const rate = typeof body.model === 'string' && Object.hasOwn(rates, body.model) ? rates[body.model] : undefined;
+    if (!rate || typeof body.maxTokens !== 'number' || !Number.isInteger(body.maxTokens) || body.maxTokens < 1 || body.maxTokens > 4096 || typeof body.system !== 'string' || body.system.length > 4000 || !body.input || typeof body.input !== 'object') return reply({ error: 'INVALID_ANALYSIS' }, 400);
     const input = JSON.stringify(body.input);
     const inputBytes = encoder.encode(body.system + input).length + 2048;
     const upperCost = (inputBytes * rate.input + body.maxTokens * rate.output) / 1_000_000 * 1.1;
@@ -46,6 +47,9 @@ Deno.serve(async req => {
       thinking: { type: 'disabled' }, response_format: { type: 'json_object' }, max_tokens: body.maxTokens, stream: false, temperature: 0.2 });
   }
   const controller = new AbortController();
+  const cancel = () => controller.abort();
+  req.signal.addEventListener('abort', cancel, { once: true });
+  if (req.signal.aborted) controller.abort();
   const timer = setTimeout(() => controller.abort(), 110000);
   try {
     // Fixed upstream; caller cannot turn this service into an arbitrary credential-bearing HTTP proxy.
@@ -58,5 +62,5 @@ Deno.serve(async req => {
     if (body.action === 'models') return reply({ data: Array.isArray(result.data) ? result.data.map((m: { id: string }) => ({ id: m.id })) : [] });
     return reply({ choices: result.choices, usage: result.usage });
   } catch { return reply({ error: 'UPSTREAM_TIMEOUT_OR_NETWORK_ERROR' }, 504); }
-  finally { clearTimeout(timer); body.apiKey = ''; }
+  finally { clearTimeout(timer); req.signal.removeEventListener('abort', cancel); body.apiKey = ''; }
 });

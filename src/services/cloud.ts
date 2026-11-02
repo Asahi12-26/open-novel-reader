@@ -22,7 +22,10 @@ const CONFIG_KEY = 'onr.cloud.public-config';
 export function getCloudConfig(): CloudConfig {
   try {
     const saved = JSON.parse(localStorage.getItem(CONFIG_KEY) || 'null');
-    if (saved?.url && saved?.anonKey) return saved;
+    if (typeof saved?.url === 'string' && typeof saved?.anonKey === 'string' && saved.url && saved.anonKey) {
+      const url = new URL(saved.url);
+      if (url.protocol === 'https:' || (url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname))) return { url: url.origin, anonKey: saved.anonKey };
+    }
   } catch { /* invalid public configuration can be replaced */ }
   return { url: import.meta.env.VITE_SUPABASE_URL || '', anonKey: import.meta.env.VITE_SUPABASE_ANON_KEY || '' };
 }
@@ -39,6 +42,7 @@ export function configureCloud(url: string, anonKey: string): void {
   if (client) { client.auth.stopAutoRefresh(); void client.removeAllChannels(); }
   localStorage.setItem(CONFIG_KEY, JSON.stringify({ url: parsed.origin, anonKey: key }));
   client = null;
+  window.dispatchEvent(new Event('onr-cloud-config-changed'));
 }
 export function getCloudClient(): SupabaseClient {
   const config = getCloudConfig();
@@ -69,8 +73,13 @@ export async function signOut() {
 export function subscribeAuth(callback: (session: Session | null) => void): () => void {
   const config = getCloudConfig();
   if (!config.url || !config.anonKey) return () => {};
-  const { data } = getCloudClient().auth.onAuthStateChange((_event, session) => callback(session));
-  return () => data.subscription.unsubscribe();
+  try {
+    const { data } = getCloudClient().auth.onAuthStateChange((_event, session) => callback(session));
+    return () => data.subscription.unsubscribe();
+  } catch {
+    // Invalid deployment configuration must not prevent opening the offline reader.
+    return () => {};
+  }
 }
 async function requireUser() {
   const { data, error } = await getCloudClient().auth.getUser();
@@ -395,10 +404,16 @@ export function startAutoSync(onState?: (state: AutoSyncState) => void): () => v
     } catch (error) { if (!disposed) onState?.({ status: 'error', error: error instanceof Error ? error.message : '同步失败，请手动重试。' }); }
   };
   const schedule = () => { if (timer) clearTimeout(timer); timer = setTimeout(() => { void run(); }, 1500); };
-  const unsubscribe = subscribeAuth(session => { if (session) schedule(); });
+  let unsubscribe = subscribeAuth(session => { if (session) schedule(); });
+  const reconfigure = () => {
+    unsubscribe();
+    unsubscribe = subscribeAuth(session => { if (session) schedule(); });
+    schedule();
+  };
+  window.addEventListener('onr-cloud-config-changed', reconfigure);
   window.addEventListener('online', schedule);
   window.addEventListener('focus', schedule);
   const interval = setInterval(schedule, 60000);
   schedule();
-  return () => { disposed = true; if (timer) clearTimeout(timer); clearInterval(interval); unsubscribe(); window.removeEventListener('online', schedule); window.removeEventListener('focus', schedule); };
+  return () => { disposed = true; if (timer) clearTimeout(timer); clearInterval(interval); unsubscribe(); window.removeEventListener('onr-cloud-config-changed', reconfigure); window.removeEventListener('online', schedule); window.removeEventListener('focus', schedule); };
 }

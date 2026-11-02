@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { analyzeChapter, clearAIKey, correctDialogue, estimateAnalysis, extractDialogues, setAIKey, validateAttributions } from './ai';
+import { analyzeChapter, clearAIKey, correctDialogue, estimateAnalysis, extractDialogues, reserveAnalysisBudget, setAIKey, validateAttributions } from './ai';
 import { mergeBundles, selectAccountProfile, validateBundle, type BookBundle } from './cloud';
 import { db } from '../core/db';
 import type { Book, Chapter } from '../types';
@@ -10,7 +10,7 @@ const chapter: Chapter = { id: 'test-chapter', bookId: book.id, index: 0, title:
 const bundle = (): BookBundle => ({ schema: 1, book: { ...book }, chapters: [chapter], bookmarks: [], characters: [], dialogues: [], corrections: [], jobs: [] });
 afterEach(async () => {
   clearAIKey(); vi.restoreAllMocks();
-  await Promise.all([db.jobs.clear(), db.dialogues.clear(), db.corrections.clear(), db.chapters.clear()]);
+  await Promise.all([db.jobs.clear(), db.dialogues.clear(), db.corrections.clear(), db.chapters.clear(), db.settings.clear()]);
 });
 describe('dialogue and authorization boundaries', () => {
   it('extracts exact Chinese and English offsets without treating apostrophes as dialogue', () => {
@@ -42,6 +42,15 @@ describe('dialogue and authorization boundaries', () => {
     await correctDialogue(candidate.id, null);
     expect((await db.corrections.get(`manual:${candidate.id}`))?.characterId).toBeNull();
     expect((await db.dialogues.get(candidate.id))?.source).toBe('manual');
+  });
+  it('atomically caps concurrent reservations for the same paid task', async () => {
+    const outcomes = await Promise.allSettled([
+      reserveAnalysisBudget('concurrent', 'chapter-model', 0.06, 0.10),
+      reserveAnalysisBudget('concurrent', 'chapter-model', 0.06, 0.10),
+    ]);
+    expect(outcomes.filter(r => r.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.filter(r => r.status === 'rejected')).toHaveLength(1);
+    expect((await db.settings.get('analysis-reservation:concurrent'))?.value).toEqual({ signature: 'chapter-model', reservedUsd: 0.06 });
   });
 });
 describe('three-way cloud merge', () => {

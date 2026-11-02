@@ -7,12 +7,12 @@ test('TXT import, paragraph anchors, typography, bookmarks and restart persisten
   await page.goto('/');
   await importText(page);
   await page.getByRole('button', { name: '关闭提示', exact: true }).click();
-  await page.screenshot({ path: 'test-results/desktop-bookshelf.png', fullPage: true });
+  await page.screenshot({ path: 'artifacts/qa/desktop-bookshelf.png', fullPage: true });
   await page.getByRole('button', { name: '阅读 稳定锚点', exact: true }).click();
   const reader = page.getByRole('dialog', { name: '阅读 稳定锚点', exact: true });
   await expect(reader.getByRole('heading', { name: '第一章 山间来信', exact: true })).toBeVisible();
   await expect(reader).toHaveCSS('opacity', '1');
-  await page.screenshot({ path: 'test-results/desktop-reader.png' });
+  await page.screenshot({ path: 'artifacts/qa/desktop-reader.png' });
   await reader.locator('[data-paragraph="28"]').evaluate(element => element.scrollIntoView({ block: 'start' }));
   await expect.poll(async () => (await progress(page))?.paragraphIndex).toBeGreaterThan(20);
   const anchor = (await progress(page))!.paragraphIndex;
@@ -51,10 +51,16 @@ test('EPUB imports real package/spine/navigation, stays readable and never execu
   const reader = page.getByRole('dialog', { name: '阅读 真实 EPUB 测试', exact: true });
   await expect(reader.getByText('“Welcome home,” Ada said.', { exact: true })).toBeVisible();
   await expect(reader.getByRole('heading', { name: 'Arrival', exact: true })).toBeVisible();
+  await expect.poll(async () => (await progress(page))?.chapterId).toMatch(/:ch:0$/);
+  const firstChapterId = (await progress(page))!.chapterId;
   expect(await page.evaluate(() => '__epubScriptExecuted' in window)).toBe(false);
   await reader.getByRole('button', { name: '下一章', exact: true }).click();
   await expect(reader.getByRole('heading', { name: 'Homecoming', exact: true })).toBeVisible();
   await expect(reader.getByText('The journey continued in another chapter.', { exact: true })).toBeVisible();
+  // Rendering can precede an IndexedDB commit on fast Linux runners. Assert the
+  // autosave completed before testing a new page's restoration of durable data.
+  await expect.poll(async () => (await progress(page))?.chapterId).toBe(firstChapterId.replace(/:ch:0$/, ':ch:1'));
+  await expect.poll(async () => (await progress(page))?.paragraphIndex).toBe(0);
   await page.reload();
   await expect(reader.getByRole('heading', { name: 'Homecoming', exact: true })).toBeVisible();
 });

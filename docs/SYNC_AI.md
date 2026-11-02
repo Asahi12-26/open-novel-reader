@@ -24,11 +24,11 @@ Web 使用已登录的 Supabase Edge Function。客户端 API Key **仅在内存
 运行：
 
 ```sh
-supabase secrets set ALLOWED_ORIGINS="https://你的站点,http://localhost:1420,http://127.0.0.1:1420,http://tauri.localhost,tauri://localhost"
+supabase secrets set ALLOWED_ORIGINS="https://asahi12-26.github.io,http://localhost:1420,http://127.0.0.1:1420,https://tauri.localhost,http://tauri.localhost,tauri://localhost"
 supabase functions deploy deepseek-proxy
 ```
 
-函数启用平台 JWT 验证，并额外使用 Supabase `getUser` 验证登录。允许来源为精确白名单；根据 Android WebView 的实际 origin 添加对应项。不要设置通配来源。函数只允许固定 `https://api.deepseek.com/models` 与 `/chat/completions`，拒绝任意代理地址，限制请求体、输出 tokens、模型和单请求保守费用预算。
+函数启用平台 JWT 验证，并额外使用 Supabase `getUser` 验证登录。允许来源为精确白名单；Windows/Android 当前使用 HTTPS WebView 源 `https://tauri.localhost`。上述命令包含目前公开 Web 站点的 origin；自行部署请替换为自己的站点 origin（无需路径）。不要设置通配来源。函数只允许固定 `https://api.deepseek.com/models` 与 `/chat/completions`，拒绝任意代理地址，在流式读取时限制请求体、限制输出 tokens、模型和单请求保守费用预算。
 
 密钥会随明确操作通过 TLS 发送到**你配置的 Supabase 服务端**，然后作为 Authorization 发送到 DeepSeek。函数只在本次调用内使用、不持久化也不打印。部署者仍须确保反向代理/观测系统不记录请求体；客户端内存策略不能阻止用户安装的不可信扩展或受感染终端读取内存。
 

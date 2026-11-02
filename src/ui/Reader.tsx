@@ -39,6 +39,7 @@ export default function Reader({ book, chapters, progress, preferences, onPrefer
   const target = useRef({ chapterId: chapters[first].id, paragraphIndex: progress?.paragraphIndex ?? 0, offset: progress?.offset ?? 0 });
   const latest = useRef(target.current);
   const restored = useRef(false);
+  const navigation = useRef(0);
   const chapter = chapters[index];
   const reduced = useReducedMotion();
   const marks = useQuery(() => db.bookmarks.where('bookId').equals(book.id).toArray(), [book.id], []);
@@ -96,11 +97,19 @@ export default function Reader({ book, chapters, progress, preferences, onPrefer
     const root = scroller.current; const p = root?.querySelector<HTMLElement>(`[data-paragraph="${latest.current.paragraphIndex}"]`);
     if (root && p && (latest.current.paragraphIndex > 0 || latest.current.offset > 0)) scrollToAnchor(root,p,latest.current.offset);
   }, [preferences.fontSize, preferences.lineHeight, preferences.readerWidth, preferences.fontFamily]);
-  function goChapter(next: number, paragraphIndex = 0) {
+  async function goChapter(next: number, paragraphIndex = 0) {
     if (!chapters[next]) return;
+    const ticket = ++navigation.current;
     target.current = { chapterId: chapters[next].id, paragraphIndex, offset: 0 };
+    latest.current = target.current;
+    restored.current = false;
+    // Commit the destination before showing it, including a reload immediately after navigation.
+    try { await saveProgress(book.id,chapters[next].id,paragraphIndex,0); }
+    catch { notify('阅读位置保存失败，请检查设备存储空间。'); }
+    if (ticket !== navigation.current) return;
     if (next === index) { const root = scroller.current; const p = root?.querySelector<HTMLElement>(`[data-paragraph="${paragraphIndex}"]`); if (root && p) { if(paragraphIndex)scrollToAnchor(root,p,0);else root.scrollTop=0; } }
     else setIndex(next);
+    if(next === index) restored.current = true;
     setToc(false); setBookmarkList(false);
   }
   const addBookmark = () => run(async () => {
