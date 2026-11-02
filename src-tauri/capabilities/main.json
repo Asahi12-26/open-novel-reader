@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Minimal capability for the local reader window. Book imports use the system webview file picker.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

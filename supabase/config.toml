@@ -1,0 +1,4 @@
+project_id = "open-novel-reader"
+
+[functions.deepseek-proxy]
+verify_jwt = true

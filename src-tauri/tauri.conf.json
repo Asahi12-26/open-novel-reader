@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Open Novel Reader",
+  "version": "0.1.0-beta.1",
+  "identifier": "io.github.opennovelreader.app",
+  "build": {
+    "beforeDevCommand": "npm run dev -- --port 1420",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [{
+      "label": "main",
+      "title": "Open Novel Reader · 阅见",
+      "width": 1240,
+      "height": 850,
+      "minWidth": 360,
+      "minHeight": 600,
+      "dragDropEnabled": false,
+      "useHttpsScheme": true,
+      "backgroundColor": "#F4F1E9"
+    }],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: blob:; font-src 'self' data:; connect-src ipc: http://ipc.localhost https: wss:; object-src 'none'; frame-src 'none'; base-uri 'self'",
+      "capabilities": ["main"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "category": "Education",
+    "shortDescription": "Local-first open-source novel reader",
+    "longDescription": "Read your own TXT and DRM-free EPUB books offline, with optional private sync and explicitly authorized AI analysis.",
+    "license": "AGPL-3.0-only",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
+      "nsis": { "installMode": "currentUser", "languages": ["English", "SimpChinese"], "displayLanguageSelector": true }
+    },
+    "android": { "minSdkVersion": 26, "versionCode": 1001 },
+    "iOS": { "minimumSystemVersion": "15.0" }
+  }
+}

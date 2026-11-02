@@ -1,0 +1,23 @@
+[package]
+name = "open-novel-reader"
+version = "0.1.0-beta.1"
+description = "A local-first, open-source novel reader"
+edition = "2021"
+rust-version = "1.77.2"
+license = "AGPL-3.0-only"
+
+[lib]
+name = "open_novel_reader_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
