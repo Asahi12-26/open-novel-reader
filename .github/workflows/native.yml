@@ -3,6 +3,7 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+    paths-ignore: ['README.md', 'PROJECT_STATUS.md', 'docs/USAGE.md', 'docs/BUILD.md', 'docs/SYNC_AI.md']
   workflow_dispatch:
 permissions:
   contents: read
@@ -84,9 +85,16 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: release-artifacts
+      - name: Package accompanying licenses and source notices
+        run: |
+          mkdir -p release-notices
+          cp LICENSE THIRD_PARTY_NOTICES.md docs/RUST_DEPENDENCIES.md release-notices/
+          cp -R docs/licenses release-notices/third-party
+          zip -qr release-artifacts/THIRD_PARTY_LICENSES.zip release-notices
       - name: Publish Beta assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -94,4 +102,17 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           mapfile -d '' assets < <(find release-artifacts -type f \( -name '*.exe' -o -name '*.apk' \) -print0)
-          gh release create "$RELEASE_TAG" "${assets[@]}" --prerelease --generate-notes --title "Open Novel Reader $RELEASE_TAG" --notes 'Windows installer is not Authenticode-signed. Android APK is a debug-signed ARM64 development build; back up your library before changing signing keys. Native device validation is tracked in PROJECT_STATUS.md.'
+          if [ "${#assets[@]}" -ne 2 ]; then
+            echo 'Expected exactly one Windows installer and one Android APK.' >&2
+            exit 1
+          fi
+          assets+=(release-artifacts/THIRD_PARTY_LICENSES.zip)
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+          else
+            gh release create "$RELEASE_TAG" "${assets[@]}" --prerelease --generate-notes --title "Open Novel Reader $RELEASE_TAG" --notes 'Windows installer is not Authenticode-signed. Android APK is a debug-signed ARM64 development build; back up your library before changing signing keys. Native device validation is tracked in PROJECT_STATUS.md.'
+          fi
+          for asset in "${assets[@]}"; do
+            printf '%s  %s\n' "$(sha256sum "$asset" | cut -d ' ' -f 1)" "$(basename "$asset")"
+          done > release-artifacts/SHA256SUMS.txt
+          gh release upload "$RELEASE_TAG" release-artifacts/SHA256SUMS.txt --clobber

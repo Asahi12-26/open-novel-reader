@@ -2,7 +2,7 @@ export type BookFormat = 'txt' | 'epub';
 export interface Book {
   id: string; title: string; author: string; format: BookFormat; language: string;
   cover?: string; coverColor: string; fingerprint: string; totalWords: number; chapterCount: number;
-  createdAt: number; updatedAt: number; shelfId?: string; cloudEnabled: boolean; deletedAt?: number;
+  createdAt: number; updatedAt: number; shelfId?: string; cloudEnabled: boolean; deletedAt?: number; restoredAt?: number;
 }
 export interface BookFile { bookId: string; name: string; mime: string; bytes: Blob }
 export interface Chapter { id: string; bookId: string; index: number; title: string; paragraphs: string[]; sourcePath?: string }

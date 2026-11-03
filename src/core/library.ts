@@ -11,7 +11,7 @@ export async function importBook(file: File): Promise<Book> {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   const fingerprint = Array.from(new Uint8Array(digest), n => n.toString(16).padStart(2, '0')).join('');
   const existing = await db.books.where('fingerprint').equals(fingerprint).first();
-  if (existing && !existing.deletedAt) return existing;
+  if (existing && existing.deletedAt === undefined) return existing;
   const id = `book-${fingerprint.slice(0, 32)}`;
   const format = /\.epub$/i.test(file.name) ? 'epub' : 'txt';
   const parsed = format === 'epub' ? await parseEpub(bytes, file.name, id) : parseTxt(bytes, file.name, id);
@@ -25,7 +25,14 @@ export async function importBook(file: File): Promise<Book> {
   return db.transaction('rw', [db.books, db.files, db.chapters, db.syncState], async () => {
     // A second import can have finished while the EPUB was being parsed.
     const duplicate = await db.books.get(id);
-    if (duplicate && !duplicate.deletedAt) return duplicate;
+    if (duplicate && duplicate.deletedAt === undefined) return duplicate;
+    const tombstone = duplicate || existing;
+    if (tombstone?.deletedAt !== undefined) {
+      // Only importing an explicitly deleted local book can revive its cloud
+      // tombstone; ordinary metadata edits and first imports never emit this.
+      book.restoredAt = Math.max(Date.now(), tombstone.deletedAt + 1, tombstone.restoredAt || 0);
+      book.updatedAt = Math.max(book.updatedAt, book.restoredAt);
+    }
     await db.books.put(book);
     await db.files.put({ bookId: id, name: file.name, mime: format === 'epub' ? 'application/epub+zip' : 'text/plain', bytes: new Blob([bytes], { type: file.type }) });
     await db.chapters.where('bookId').equals(id).delete();
@@ -55,7 +62,8 @@ export async function saveProgress(bookId: string, chapterId: string, paragraphI
 /** Retain a dated tombstone so reconnecting devices cannot resurrect a deletion. */
 export async function deleteBook(bookId: string): Promise<void> {
   await db.transaction('rw', [db.books, db.syncState], async () => {
-    const now = Date.now();
+    const existing = await db.books.get(bookId);
+    const now = Math.max(Date.now(), existing?.deletedAt || 0, existing?.restoredAt || 0);
     await db.books.update(bookId, { deletedAt: now, updatedAt: now });
     await db.syncState.put({ id: 'local', updatedAt: now });
   });
@@ -107,7 +115,7 @@ function validateBackup(value: unknown): Backup {
   const backup = value as unknown as Backup;
   const bookIds = new Set<string>();
   for (const row of backup.books) {
-    if (!object(row) || !id(row.id) || bookIds.has(row.id) || !str(row.title, 300) || !str(row.author, 200) || !str(row.language, 100) || !['txt', 'epub'].includes(row.format) || !/^[a-f\d]{64}$/.test(row.fingerprint) || !/^#[a-f\d]{6}$/i.test(row.coverColor) || !num(row.createdAt) || !num(row.updatedAt) || !num(row.totalWords) || !num(row.chapterCount) || !safeCover(row.cover) || (row.deletedAt !== undefined && !num(row.deletedAt)) || (row.shelfId !== undefined && !id(row.shelfId))) invalid();
+    if (!object(row) || !id(row.id) || bookIds.has(row.id) || !str(row.title, 300) || !str(row.author, 200) || !str(row.language, 100) || !['txt', 'epub'].includes(row.format) || !/^[a-f\d]{64}$/.test(row.fingerprint) || !/^#[a-f\d]{6}$/i.test(row.coverColor) || !num(row.createdAt) || !num(row.updatedAt) || !num(row.totalWords) || !num(row.chapterCount) || !safeCover(row.cover) || (row.deletedAt !== undefined && !num(row.deletedAt)) || (row.restoredAt !== undefined && (!num(row.restoredAt) || !Number.isSafeInteger(row.restoredAt))) || (row.shelfId !== undefined && !id(row.shelfId))) invalid();
     bookIds.add(row.id);
   }
   const chapterIds = new Set<string>();

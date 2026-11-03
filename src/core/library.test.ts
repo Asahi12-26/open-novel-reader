@@ -19,6 +19,8 @@ describe('local-first persistence', () => {
     const book = await importBook(novel());
     const second = await importBook(novel());
     expect(second.id).toBe(book.id);
+    expect(book.restoredAt).toBeUndefined();
+    expect(second.restoredAt).toBeUndefined();
     expect(await db.books.count()).toBe(1);
     const chapters = await listChapters(book.id);
     await saveProgress(book.id, chapters[0].id, 1, 3);
@@ -32,11 +34,44 @@ describe('local-first persistence', () => {
     const book = await importBook(novel());
     await db.books.update(book.id, { cloudEnabled: true });
     await deleteBook(book.id);
-    expect((await db.books.get(book.id))?.deletedAt).toBeGreaterThan(0);
+    const deletedAt = (await db.books.get(book.id))!.deletedAt!;
+    expect(deletedAt).toBeGreaterThan(0);
     const restored = await importBook(novel());
     expect(restored.id).toBe(book.id);
     expect(restored.deletedAt).toBeUndefined();
     expect(restored.cloudEnabled).toBe(false);
+    expect(restored.restoredAt).toBeGreaterThan(deletedAt);
+    const duplicate = await importBook(novel());
+    expect(duplicate.restoredAt).toBe(restored.restoredAt);
+  });
+
+  it('makes later explicit deletion win even when an earlier tombstone had a future timestamp', async () => {
+    const book = await importBook(novel());
+    const futureDeletedAt = Date.now() + 60_000;
+    await db.books.update(book.id, { deletedAt: futureDeletedAt, updatedAt: futureDeletedAt });
+    const restored = await importBook(novel());
+    expect(restored.restoredAt).toBe(futureDeletedAt + 1);
+    await deleteBook(book.id);
+    const deleted = (await db.books.get(book.id))!;
+    expect(deleted.deletedAt).toBeGreaterThanOrEqual(restored.restoredAt!);
+    expect(deleted.restoredAt).toBe(restored.restoredAt);
+  });
+
+  it('preserves explicit restoration markers through backup and rejects invalid markers atomically', async () => {
+    const book = await importBook(novel());
+    await deleteBook(book.id);
+    const restored = await importBook(novel());
+    const backup = await exportBackup();
+    const raw = JSON.parse(await backup.text());
+    for (const marker of [-1, 1.5, '123', null, Number.MAX_SAFE_INTEGER + 1]) {
+      raw.books[0].restoredAt = marker;
+      await expect(restoreBackup(new File([JSON.stringify(raw)], 'bad-marker.json'))).rejects.toThrow('未被修改');
+      expect((await db.books.get(book.id))!.restoredAt).toBe(restored.restoredAt);
+    }
+    await db.delete(); await db.open();
+    await restoreBackup(new File([backup], 'restored.json'));
+    expect((await db.books.get(book.id))!.restoredAt).toBe(restored.restoredAt);
+    expect((await db.books.get(book.id))!.cloudEnabled).toBe(false);
   });
 
   it('round-trips backup bytes and corrections, excludes secrets, and preserves unrelated books', async () => {

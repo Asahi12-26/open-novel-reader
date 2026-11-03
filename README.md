@@ -2,6 +2,23 @@
 
 免费、开源、Local-first 的跨平台小说阅读器。React + TypeScript + Vite PWA，共享 Tauri 2 桌面与移动端外壳。AGPL-3.0-only。
 
+**立即阅读：[打开公开 Web / PWA](https://asahi12-26.github.io/open-novel-reader/)**。导入自己的 TXT / EPUB 即可使用，无需注册。云同步与 AI 是可选功能，需自行配置服务。
+
+## 当前版本与下载
+
+当前版本为 **0.1.0-beta.1**。
+
+| 平台 | 已验证状态 | 使用入口 |
+| --- | --- | --- |
+| Web / PWA | 已公开部署；桌面和手机浏览器冒烟、离线重开通过 | [在线使用](https://asahi12-26.github.io/open-novel-reader/) |
+| Windows x64 | NSIS 安装、文件导入、关闭重启续读及本轮覆盖升级保留书籍 / 位置 / 书签已验证 | [成功构建的安装包产物](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41422399968)中的 `windows-x64-installer` |
+| Android ARM64 | 已成功生成开发签名 APK；尚未完成真机安装验证 | [成功构建的 APK 产物](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41422399968)中的 `android-arm64-debug-apk` |
+| iOS | 保留共享架构，尚无 IPA 构建 | 需要 macOS 和签名条件 |
+
+Actions 产物下载后需先解压；GitHub 可能要求登录。版本发布入口为 [Releases](https://github.com/Asahi12-26/open-novel-reader/releases)。Windows 安装包尚未做 Authenticode 签名；Android 当前是 ARM64 开发签名包，尚未用于应用商店分发。安装、阅读与备份步骤见 [使用指南](docs/USAGE.md)。
+
+最近一轮远端检查已通过 **26 项单元测试、4 项生产浏览器冒烟测试、TypeScript 检查、生产构建与运行时依赖许可检查**。对应提交、验证记录与剩余工作见 [PROJECT_STATUS.md](PROJECT_STATUS.md)。
+
 ## 现在可以用什么
 
 - 本地导入中文 / 英文 TXT（UTF-8、GB18030、带 BOM 的 UTF-16）和无 DRM 的 EPUB；自动目录、封面、内容指纹去重。
@@ -11,7 +28,7 @@
 - Supabase 邮箱账号与同步实现、RLS 和私有 Storage 迁移；需部署自己的云项目后启用。
 - 真实 DeepSeek 章节对白识别接口、预算估计、每次授权、分片暂停 / 取消 / 重试、未知人物、人工纠正、人物新建 / 改名 / 合并。需自己的 API Key 与已部署代理。
 
-**尚不能称为全部平台正式完成：** Windows 安装程序和 Android APK 由 GitHub Actions 构建，实际产物及失败情况见 [Actions](https://github.com/Asahi12-26/open-novel-reader/actions) 和 [PROJECT_STATUS.md](PROJECT_STATUS.md)。本机缺少原生编译工具链。Supabase 和真实付费 AI 尚未在真实账号上联调，开发没有产生 AI 费用。EPUB 当前按文本阅读，保留章节和段落，暂不呈现插图、富文本强调或出版商 CSS；不支持 DRM、漫画和固定版式 EPUB。
+Supabase 的真实双账号 / 多设备同步尚未联调；DeepSeek 的真实收费分析尚未执行，开发没有产生 AI 费用。EPUB 当前按文本阅读，保留章节和段落，暂不呈现插图、富文本强调或出版商 CSS；不支持 DRM、漫画和固定版式 EPUB。
 
 ## 本地运行
 
@@ -30,7 +47,7 @@ npm run build
 npm run preview -- --port 4173
 ```
 
-生产版使用 service worker 缓存应用。首次联网打开并完成缓存后，可离线再次打开；个人小说存于 IndexedDB。浏览器和原生 App 的书库各自独立，清除网站 / 应用数据会移除本地书库，建议定期导出备份。
+生产版使用 service worker 缓存应用。首次联网打开并完成缓存后，可离线再次打开；个人小说存于 IndexedDB。浏览器和原生 App 的书库各自独立，清除网站 / 应用数据会移除本地书库，建议定期导出备份。离线缓存测试针对生产版；`npm run dev` 不提供完整 PWA 离线体验。
 
 ## 云同步与 AI
 
@@ -42,7 +59,7 @@ DeepSeek Key **仅保存在本次会话内存**。Web / 原生目前统一经自
 
 ## 构建与发布
 
-参见 [平台构建](docs/BUILD.md)。CI 包含 Web 检查、PWA 产物、Windows NSIS 和 Android ARM64 开发签名 APK。打 `v*` tag 后由工作流创建预发布；iOS 预留，需要 macOS 与签名。未设置自动二进制更新：当前通过 Releases 手动安装更新，更新前先备份。
+参见 [平台构建](docs/BUILD.md)。CI 已实际生成 Windows NSIS 和 Android ARM64 开发签名 APK，公开 PWA 由 GitHub Pages 部署。main 更新自动执行检查和平台构建，打 `v*` tag 后由工作流创建预发布。未设置自动二进制更新：当前从 Releases 手动获取新版，更新前先备份；本轮 Windows 覆盖升级已验证，Android 真机升级仍待检查。
 
 ## 代码布局
 

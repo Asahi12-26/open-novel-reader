@@ -3,6 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    paths-ignore: ['README.md', 'PROJECT_STATUS.md', 'docs/USAGE.md', 'docs/BUILD.md', 'docs/SYNC_AI.md']
 permissions:
   contents: read
   pages: write

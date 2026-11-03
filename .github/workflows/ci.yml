@@ -1,6 +1,7 @@
 name: Web checks
 on:
   push:
+    paths-ignore: ['README.md', 'PROJECT_STATUS.md', 'docs/USAGE.md', 'docs/BUILD.md', 'docs/SYNC_AI.md']
   pull_request:
   workflow_dispatch:
 permissions:

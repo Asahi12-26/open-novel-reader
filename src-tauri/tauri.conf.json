@@ -34,6 +34,12 @@
     "shortDescription": "Local-first open-source novel reader",
     "longDescription": "Read your own TXT and DRM-free EPUB books offline, with optional private sync and explicitly authorized AI analysis.",
     "license": "AGPL-3.0-only",
+    "resources": {
+      "../LICENSE": "licenses/AGPL-3.0.txt",
+      "../THIRD_PARTY_NOTICES.md": "licenses/THIRD_PARTY_NOTICES.md",
+      "../docs/RUST_DEPENDENCIES.md": "licenses/RUST_DEPENDENCIES.md",
+      "../docs/licenses/": "licenses/third-party/"
+    },
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },

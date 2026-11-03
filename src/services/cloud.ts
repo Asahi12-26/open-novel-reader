@@ -14,6 +14,8 @@ export interface BookBundle {
 }
 interface CloudRow { id: string; payload: BookBundle; revision: number }
 interface Link { revision: number; snapshot: BookBundle }
+export const CLOUD_FILE_MAX_BYTES = 50 * 1024 * 1024;
+export const CLOUD_BUNDLE_MAX_BYTES = 30 * 1024 * 1024;
 let client: SupabaseClient | null = null;
 let activeSync: Promise<SyncResult> | null = null;
 const CONFIG_KEY = 'onr.cloud.public-config';
@@ -126,18 +128,23 @@ function mergeList<T extends { id: string }>(local: T[], remote: T[], base: T[])
 /** Three-way merge; permanent tombstones win and corrections remain separate from AI output. */
 export function mergeBundles(local: BookBundle, remote: BookBundle, base: BookBundle): BookBundle {
   const deletedAt = Math.max(local.book.deletedAt || 0, remote.book.deletedAt || 0);
+  const restoredAt = Math.max(local.book.restoredAt || 0, remote.book.restoredAt || 0, base.book.restoredAt || 0);
   const book = local.book.updatedAt >= remote.book.updatedAt ? local.book : remote.book;
-  if (deletedAt) return { schema: 1, book: { ...book, cover: undefined, deletedAt, cloudEnabled: true }, chapters: [], bookmarks: [], characters: [], dialogues: [], corrections: [], jobs: [], file: local.file || remote.file };
+  if (deletedAt && deletedAt >= restoredAt) return { schema: 1, book: { ...book, cover: undefined, deletedAt, ...(restoredAt ? { restoredAt } : {}), cloudEnabled: true }, chapters: [], bookmarks: [], characters: [], dialogues: [], corrections: [], jobs: [], file: local.file || remote.file };
+  const restoration = [local.book, remote.book].filter(b => !b.deletedAt && b.restoredAt === restoredAt).sort((a, b) => b.updatedAt - a.updatedAt)[0];
+  const { deletedAt: _previousDeletion, ...liveBook } = restoration || book;
+  // An older tombstone's empty lists are not new annotation deletions after explicit reimport.
+  const listBase = deletedAt && restoredAt > deletedAt ? { ...base, bookmarks: [], characters: [], dialogues: [], corrections: [], jobs: [] } : base;
   const progress = !local.progress ? remote.progress : !remote.progress ? local.progress :
     local.progress.updatedAt >= remote.progress.updatedAt ? local.progress : remote.progress;
   const merged: BookBundle = {
-    schema: 1, book: { ...book, ...(deletedAt ? { deletedAt } : {}), cloudEnabled: true },
+    schema: 1, book: { ...liveBook, ...(restoredAt ? { restoredAt } : {}), cloudEnabled: true },
     chapters: local.chapters.length ? local.chapters : remote.chapters, progress,
-    bookmarks: mergeList(local.bookmarks, remote.bookmarks, base.bookmarks),
-    characters: mergeList(local.characters, remote.characters, base.characters),
-    dialogues: mergeList(local.dialogues, remote.dialogues, base.dialogues),
-    corrections: mergeList(local.corrections, remote.corrections, base.corrections),
-    jobs: mergeList(local.jobs, remote.jobs, base.jobs), file: local.file || remote.file,
+    bookmarks: mergeList(local.bookmarks, remote.bookmarks, listBase.bookmarks),
+    characters: mergeList(local.characters, remote.characters, listBase.characters),
+    dialogues: mergeList(local.dialogues, remote.dialogues, listBase.dialogues),
+    corrections: mergeList(local.corrections, remote.corrections, listBase.corrections),
+    jobs: mergeList(local.jobs, remote.jobs, listBase.jobs), file: !local.book.deletedAt && local.file ? local.file : remote.file || local.file,
   };
   const characters = new Map(merged.characters.map(c => [c.id, c]));
   const previousCharacters = new Map([...base.characters, ...remote.characters, ...local.characters].map(c => [c.id, c]));
@@ -153,6 +160,11 @@ export function mergeBundles(local: BookBundle, remote: BookBundle, base: BookBu
     return correction ? { ...d, characterId: correction.characterId, source: 'manual', confidence: 1 } : { ...d, characterId: remap(d.characterId) };
   });
   return merged;
+}
+/** The server adds JSONB formatting overhead; 30 MiB leaves headroom below its 40,000,000-byte constraint. */
+export function assertCloudUploadLimits(bundle: BookBundle, originalSize: number): void {
+  if (!bundle.book.deletedAt && originalSize > CLOUD_FILE_MAX_BYTES) throw new Error('这本书可继续本地阅读；云同步原文件上限为 50 MiB。本次未上传文件。');
+  if (new TextEncoder().encode(JSON.stringify(bundle)).byteLength > CLOUD_BUNDLE_MAX_BYTES) throw new Error('这本书可继续本地阅读；云同步数据包上限为 30 MiB。请减少分析数据或保留本地备份，本次未上传文件。');
 }
 async function bundleBook(book: Book, userId: string): Promise<BookBundle> {
   if (book.deletedAt) return { schema: 1, book: { ...book, cover: undefined }, chapters: [], bookmarks: [], characters: [], dialogues: [], corrections: [], jobs: [], file: { name: '', mime: '', path: `${userId}/${book.id}/original.${book.format}` } };
@@ -171,7 +183,7 @@ export function validateBundle(value: unknown, id: string): asserts value is Boo
   const text = (v: unknown, max = 1000): v is string => typeof v === 'string' && v.length <= max;
   const integer = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
   const identifier = (v: unknown): v is string => text(v, 240) && v.length > 0;
-  if (!b || b.schema !== 1 || b.book?.id !== id || !['txt', 'epub'].includes(b.book.format) || !text(b.book.title, 300) || !text(b.book.author, 200) || !text(b.book.language, 100) || !text(b.book.fingerprint, 64) || !/^[a-f\d]{64}$/.test(b.book.fingerprint) || id !== `book-${b.book.fingerprint.slice(0, 32)}` || !/^#[a-f\d]{6}$/i.test(b.book.coverColor) || !integer(b.book.createdAt) || !integer(b.book.updatedAt) || !integer(b.book.chapterCount) || !integer(b.book.totalWords) || (b.book.deletedAt !== undefined && !integer(b.book.deletedAt)) || (b.book.shelfId !== undefined && !identifier(b.book.shelfId))) throw new Error('云端书籍格式无效。');
+  if (!b || b.schema !== 1 || b.book?.id !== id || !['txt', 'epub'].includes(b.book.format) || !text(b.book.title, 300) || !text(b.book.author, 200) || !text(b.book.language, 100) || !text(b.book.fingerprint, 64) || !/^[a-f\d]{64}$/.test(b.book.fingerprint) || id !== `book-${b.book.fingerprint.slice(0, 32)}` || !/^#[a-f\d]{6}$/i.test(b.book.coverColor) || !integer(b.book.createdAt) || !integer(b.book.updatedAt) || !integer(b.book.chapterCount) || !integer(b.book.totalWords) || (b.book.deletedAt !== undefined && !integer(b.book.deletedAt)) || (b.book.restoredAt !== undefined && !integer(b.book.restoredAt)) || (b.book.shelfId !== undefined && !identifier(b.book.shelfId))) throw new Error('云端书籍格式无效。');
   for (const key of ['chapters', 'bookmarks', 'characters', 'dialogues', 'corrections', 'jobs'] as const) {
     if (!Array.isArray(b[key]) || b[key].length > 100000 || b[key].some(x => !x || x.bookId !== id || !identifier(x.id)) || new Set(b[key].map(x => x.id)).size !== b[key].length) throw new Error('云端数据的书籍引用无效。');
   }
@@ -224,7 +236,8 @@ async function applyBundle(bundle: BookBundle, userId: string, revision: number,
     if (expectedLocal) {
       const latestBook = await db.books.get(id);
       if (latestBook && !equal(await bundleBook(latestBook, userId), expectedLocal)) {
-        await db.settings.put({ id: linkKey(userId, id), value: { revision, snapshot: bundle } satisfies Link });
+        // Keep the previous merge base until incoming data is actually installed.
+        // Advancing it here would treat unseen remote bookmarks as local deletions on the next sync.
         return;
       }
     }
@@ -237,7 +250,8 @@ async function applyBundle(bundle: BookBundle, userId: string, revision: number,
       // Each tuple contains matching typed rows; Dexie's generic union cannot express that relationship.
       if (rows.length) await (table as typeof db.chapters).bulkPut(rows as Chapter[]);
     }
-    if (bundle.progress) await db.progress.put(bundle.progress);
+    if (bundle.book.deletedAt) await db.progress.delete(id);
+    else if (bundle.progress) await db.progress.put(bundle.progress);
     if (file) await db.files.put(file);
     await db.settings.put({ id: ownerKey(id), value: userId });
     await db.settings.put({ id: linkKey(userId, id), value: { revision, snapshot: bundle } satisfies Link });
@@ -249,6 +263,8 @@ async function saveRemote(id: string, payload: BookBundle, revision: number, clo
   return Number(data);
 }
 interface Profile { preferences: Preferences; shelves: Bookshelf[] }
+interface ProfileRow { payload: unknown; revision: number }
+interface ProfileLink { snapshot: Profile; revision: number }
 function normalizeProfile(value: unknown): Profile {
   const p = value as Partial<Profile> | null;
   const v = p?.preferences;
@@ -262,52 +278,85 @@ export function selectAccountProfile(current: unknown, previousOwner: string | u
   if (!previousOwner || previousOwner === userId) return normalizeProfile(current);
   return normalizeProfile(saved || remote || { preferences: defaultPreferences, shelves: [] });
 }
+function emptyProfile(): Profile { return { preferences: { ...defaultPreferences }, shelves: [] }; }
+/** Field-level preference merge and stable shelf IDs preserve independent offline edits. Shelf tombstones win. */
+export function mergeProfiles(local: Profile, remote: Profile, base: Profile): Profile {
+  const preferences = { ...defaultPreferences };
+  for (const key of Object.keys(defaultPreferences) as (keyof Preferences)[]) {
+    // Same-field conflicts prefer this device's intentional change; unrelated remote fields are retained.
+    const value = equal(local.preferences[key], base.preferences[key]) ? remote.preferences[key] : local.preferences[key];
+    Object.assign(preferences, { [key]: value });
+  }
+  const shelves = new Map(base.shelves.map(shelf => [shelf.id, { ...shelf }]));
+  for (const shelf of [...remote.shelves, ...local.shelves]) {
+    const prior = shelves.get(shelf.id);
+    if (!prior) { shelves.set(shelf.id, { ...shelf }); continue; }
+    const latest = shelf.updatedAt >= prior.updatedAt ? shelf : prior;
+    const deletedAt = Math.max(prior.deletedAt || 0, shelf.deletedAt || 0);
+    shelves.set(shelf.id, { ...latest, ...(deletedAt ? { deletedAt } : {}) });
+  }
+  return normalizeProfile({ preferences, shelves: [...shelves.values()] });
+}
+async function readLocalProfile(): Promise<Profile> {
+  return normalizeProfile({ preferences: (await db.settings.get('preferences'))?.value ?? defaultPreferences, shelves: await db.shelves.toArray() });
+}
+async function readRemoteProfile(userId: string, cloud: SupabaseClient): Promise<ProfileRow | null> {
+  const { data, error } = await cloud.from('reader_profiles').select('payload,revision').eq('user_id', userId).maybeSingle();
+  if (error) throw new Error('偏好同步失败；请确认已执行全部数据库迁移：' + error.message);
+  if (!data) return null;
+  if (!Number.isSafeInteger(data.revision) || data.revision < 1) throw new Error('云端偏好版本无效，请更新数据库迁移。');
+  return data as ProfileRow;
+}
 async function syncProfile(userId: string, cloud: SupabaseClient, assertAccount: () => Promise<void>) {
   const profileKey = `cloud-profile:${userId}`;
-  const owner = await db.settings.get('cloud-profile-owner');
-  const pref = await db.settings.get('preferences');
-  const shelves = await db.shelves.toArray();
-  const { data, error } = await cloud.from('reader_profiles').select('payload,updated_at').eq('user_id', userId).maybeSingle();
-  if (error) throw new Error('偏好同步失败：' + error.message);
+  let row = await readRemoteProfile(userId, cloud);
   await assertAccount();
-  const last = await db.settings.get(profileKey);
-  const saved = await db.settings.get(`cloud-local-profile:${userId}`);
-  const current = { preferences: pref?.value ?? defaultPreferences, shelves };
-  const previousOwner = typeof owner?.value === 'string' ? owner.value : undefined;
-  let payload = selectAccountProfile(current, previousOwner, userId, saved?.value, data?.payload);
-  const switched = previousOwner !== undefined && previousOwner !== userId;
-  const firstLink = previousOwner === undefined && !last && data?.payload;
-  if (firstLink) {
-    const remote = normalizeProfile(data.payload);
-    const categories = new Map([...remote.shelves, ...payload.shelves].map(s => [s.id, s]));
-    payload = { preferences: pref ? payload.preferences : remote.preferences, shelves: [...categories.values()].sort((a, b) => a.id.localeCompare(b.id)) };
-  }
-  if (switched) {
-    await db.settings.put({ id: `cloud-local-profile:${previousOwner}`, value: normalizeProfile(current) });
-  }
-  if (switched || firstLink) {
-    // A new account with no profile gets a neutral baseline. Never upload another account's local categories.
+  await db.transaction('rw', db.settings, db.shelves, async () => {
+    const owner = (await db.settings.get('cloud-profile-owner'))?.value;
+    if (owner === userId) return;
+    const current = await readLocalProfile();
+    const saved = (await db.settings.get(`cloud-local-profile:${userId}`))?.value;
+    const previousOwner = typeof owner === 'string' ? owner : undefined;
+    const selected = selectAccountProfile(current, previousOwner, userId, saved, row?.payload);
+    if (previousOwner) {
+      await db.settings.put({ id: `cloud-local-profile:${previousOwner}`, value: current });
+      await db.shelves.clear();
+      if (selected.shelves.length) await db.shelves.bulkPut(selected.shelves);
+      await db.settings.put({ id: 'preferences', value: selected.preferences });
+    }
+    await db.settings.put({ id: 'cloud-profile-owner', value: userId });
+  });
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt) row = await readRemoteProfile(userId, cloud);
+    await assertAccount();
+    const local = await db.transaction('r', db.settings, db.shelves, readLocalProfile);
+    const stored = (await db.settings.get(profileKey))?.value as ProfileLink | Profile | undefined;
+    // Prior beta snapshots lacked revisions. Keep their contents as a merge base during upgrade.
+    const base = stored ? normalizeProfile('snapshot' in stored ? stored.snapshot : stored) : emptyProfile();
+    const remote = row ? normalizeProfile(row.payload) : emptyProfile();
+    const payload = mergeProfiles(local, remote, base);
+    let revision = row?.revision || 0;
+    if (!row || !equal(payload, remote)) {
+      if (new TextEncoder().encode(JSON.stringify(payload)).byteLength > 1500000) throw new Error('分类与偏好数据过大，尚未上传；请先导出备份并减少分类。');
+      const result = await cloud.rpc('save_reader_profile', { p_payload: payload, p_expected_revision: revision });
+      if (result.error) {
+        if (result.error.message.includes('SYNC_CONFLICT')) continue;
+        throw new Error('偏好保存失败；请确认已执行全部数据库迁移：' + result.error.message);
+      }
+      revision = Number(result.data);
+    }
+    await assertAccount();
     await db.transaction('rw', db.settings, db.shelves, async () => {
+      if ((await db.settings.get('cloud-profile-owner'))?.value !== userId || !equal(await readLocalProfile(), local)) return;
       await db.shelves.clear();
       if (payload.shelves.length) await db.shelves.bulkPut(payload.shelves);
       await db.settings.put({ id: 'preferences', value: payload.preferences });
+      await db.settings.put({ id: profileKey, value: { snapshot: payload, revision } satisfies ProfileLink });
+      await db.settings.put({ id: `cloud-local-profile:${userId}`, value: payload });
     });
+    return;
   }
-  if ((!last && !data) || firstLink || (last && !equal(last.value, payload))) {
-    // The authenticated user's profile is scoped by RLS. Book files are handled separately.
-    const { error: writeError } = await cloud.from('reader_profiles').upsert({ user_id: userId, payload, updated_at: new Date().toISOString() });
-    if (writeError) throw new Error('偏好保存失败：' + writeError.message);
-  } else if (data?.payload) {
-    payload = normalizeProfile(data.payload);
-    await db.transaction('rw', db.settings, db.shelves, async () => {
-      await db.shelves.clear();
-      if (payload.shelves.length) await db.shelves.bulkPut(payload.shelves);
-      await db.settings.put({ id: 'preferences', value: payload.preferences });
-    });
-  }
-  await db.settings.put({ id: profileKey, value: payload });
-  await db.settings.put({ id: `cloud-local-profile:${userId}`, value: payload });
-  await db.settings.put({ id: 'cloud-profile-owner', value: userId });
+  throw new Error('其他设备正在修改分类与偏好。本机修改已保留，请稍后重试同步。');
 }
 export function syncLibrary(): Promise<SyncResult> {
   return activeSync ??= performSync().finally(() => { activeSync = null; });
@@ -355,10 +404,14 @@ async function performSync(): Promise<SyncResult> {
         result.conflicts++;
       }
       if (localChanged || (row && row.revision !== link?.revision)) {
-        if (!chosen.book.deletedAt && chosen.file && (!row || !row.payload.file)) {
-          const original = await db.files.get(book.id);
-          if (!original) throw new Error('本地原文件缺失。');
-          const { error: uploadError } = await cloud.storage.from('novel-files').upload(chosen.file.path, original.bytes, { upsert: true, contentType: 'application/octet-stream' });
+        const original = chosen.book.deletedAt ? undefined : await db.files.get(book.id);
+        if (!chosen.book.deletedAt && !original) throw new Error('本地原文件缺失。');
+        // Validate both limits before any Storage write, including explicit restoration of a deleted cloud copy.
+        assertCloudUploadLimits(chosen, original?.bytes.size || 0);
+        if (!chosen.book.deletedAt && chosen.file && (!row || !row.payload.file || row.payload.book.deletedAt)) {
+          const fingerprint = [...new Uint8Array(await crypto.subtle.digest('SHA-256', await original!.bytes.arrayBuffer()))].map(n => n.toString(16).padStart(2, '0')).join('');
+          if (fingerprint !== chosen.book.fingerprint) throw new Error('本地原文件指纹校验失败，本次未上传文件。请从备份恢复。');
+          const { error: uploadError } = await cloud.storage.from('novel-files').upload(chosen.file.path, original!.bytes, { upsert: true, contentType: 'application/octet-stream' });
           if (uploadError) throw new Error('原文件上传失败：' + uploadError.message);
         }
         await assertAccount();
