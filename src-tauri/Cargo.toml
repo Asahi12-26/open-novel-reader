@@ -21,3 +21,8 @@ codegen-units = 1
 lto = true
 opt-level = "s"
 strip = true
+
+# Keep the development-signed Android APK usable without shipping Rust DWARF symbols.
+[profile.dev]
+debug = 0
+strip = "debuginfo"

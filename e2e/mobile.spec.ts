@@ -12,6 +12,7 @@ test('mobile touch layout imports and reads without horizontal overflow', async 
   await page.getByRole('button', { name: '阅读 随身书架', exact: true }).tap();
   const reader = page.getByRole('dialog', { name: '阅读 随身书架', exact: true });
   await expect(reader.getByRole('heading', { name: '第一章 山间来信', exact: true })).toBeVisible();
+  await expect(reader.locator('.reader-cover-flight')).toHaveCount(0);
   await reader.getByRole('button', { name: '展开目录', exact: true }).tap();
   await reader.locator('.toc-list').getByRole('button').filter({ hasText: '第二章 归途' }).tap();
   await expect(reader.getByRole('heading', { name: '第二章 归途', exact: true })).toBeVisible();

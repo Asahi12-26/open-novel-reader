@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import { motion, useReducedMotion } from 'motion/react';
+import { motion, useIsPresent, useReducedMotion } from 'motion/react';
 import { ArrowLeft, ArrowRight, Bookmark as BookmarkIcon, Check, ChevronLeft, ChevronRight, List, Settings2, Sparkles, Users, X } from 'lucide-react';
 import { db } from '../core/db';
 import { saveProgress } from '../core/library';
@@ -42,6 +42,25 @@ export default function Reader({ book, chapters, progress, preferences, onPrefer
   const navigation = useRef(0);
   const chapter = chapters[index];
   const reduced = useReducedMotion();
+  const present = useIsPresent();
+  const [coverPhase, setCoverPhase] = useState<'expand' | 'settle' | 'done'>(reduced ? 'done' : 'expand');
+  const [mobileCover, setMobileCover] = useState(() => window.matchMedia('(max-width: 650px)').matches);
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 650px)');
+    const changed = () => setMobileCover(media.matches);
+    media.addEventListener('change', changed);
+    return () => media.removeEventListener('change', changed);
+  }, []);
+  useEffect(() => {
+    if (reduced) { setCoverPhase('done'); return; }
+    if (!present) return;
+    const settle = setTimeout(() => setCoverPhase('settle'), 260);
+    const done = setTimeout(() => setCoverPhase('done'), 410);
+    return () => { clearTimeout(settle); clearTimeout(done); };
+  }, [reduced, present]);
+  // Mobile keeps an invisible, measured central anchor for the shared return to
+  // the shelf. The drawer cover stays static and never becomes an offscreen target.
+  const centralCover = !reduced && (mobileCover || coverPhase === 'expand');
   const marks = useQuery(() => db.bookmarks.where('bookId').equals(book.id).toArray(), [book.id], []);
   const characters = useQuery(() => db.characters.where('bookId').equals(book.id).toArray(), [book.id], []);
   const dialogues = useQuery(() => db.dialogues.where('chapterId').equals(chapter.id).toArray(), [chapter.id], []);
@@ -132,7 +151,8 @@ export default function Reader({ book, chapters, progress, preferences, onPrefer
   }
   const close = () => { const p = latest.current; void run(() => saveProgress(book.id,p.chapterId,p.paragraphIndex,p.offset)); onClose(); };
   return <motion.section className="reader" role="dialog" aria-modal="true" aria-label={`阅读 ${book.title}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: reduced ? 0 : .3 }}>
-    <aside className={`reader-sidebar ${toc ? 'is-open' : ''}`}><button className="reader-back" onClick={close}><ArrowLeft size={18}/>回到书架</button><div className="reader-book"><BookCover book={book}/><h2>{book.title}</h2><p>{book.author || '佚名'}</p></div><div className="toc-heading"><h3>目录</h3><span>{chapters.length} 章</span><button className="icon-button mobile-only" aria-label="关闭目录" onClick={() => setToc(false)}><X size={18}/></button></div><nav className="toc-list">{chapters.map((c,i) => <button key={c.id} className={i === index ? 'active' : ''} onClick={() => goChapter(i)}><span>{String(i+1).padStart(2,'0')}</span>{c.title}{i === index && <i/>}</button>)}</nav><div className="reader-sidebar-note"><span className="status-dot"/>离线可用 · 位置自动保存</div></aside>
+    {centralCover && <div className="reader-cover-flight" aria-hidden="true"><motion.div className="reader-cover-tilt" initial={{ rotateY: 0, rotateZ: 0 }} animate={{ opacity: !mobileCover || coverPhase === 'expand' || !present ? 1 : 0, rotateY: coverPhase === 'expand' ? -12 : 0, rotateZ: coverPhase === 'expand' ? -1 : 0 }} transition={{ opacity: { duration: .15 }, rotateY: { duration: .26 }, rotateZ: { duration: .26 } }}><BookCover book={book} duration={present ? .26 : .38}/></motion.div></div>}
+    <aside className={`reader-sidebar ${toc ? 'is-open' : ''}`}><button className="reader-back" onClick={close}><ArrowLeft size={18}/>回到书架</button><div className="reader-book"><BookCover key={centralCover ? 'static-cover' : 'shared-cover'} book={book} shared={!centralCover} className={coverPhase === 'expand' ? 'reader-cover-placeholder' : ''} duration={coverPhase === 'settle' ? .15 : .38}/><h2>{book.title}</h2><p>{book.author || '佚名'}</p></div><div className="toc-heading"><h3>目录</h3><span>{chapters.length} 章</span><button className="icon-button mobile-only" aria-label="关闭目录" onClick={() => setToc(false)}><X size={18}/></button></div><nav className="toc-list">{chapters.map((c,i) => <button key={c.id} className={i === index ? 'active' : ''} onClick={() => goChapter(i)}><span>{String(i+1).padStart(2,'0')}</span>{c.title}{i === index && <i/>}</button>)}</nav><div className="reader-sidebar-note"><span className="status-dot"/>离线可用 · 位置自动保存</div></aside>
     {toc && <button className="toc-scrim" aria-label="收起目录" onClick={() => setToc(false)}/>}
     <div className="reader-main"><header className="reader-toolbar"><div className="reader-toolbar-left"><button className="icon-button mobile-only" aria-label="返回书架" onClick={close}><ArrowLeft size={20}/></button><button className="icon-button mobile-only" aria-label="展开目录" onClick={() => setToc(true)}><List size={20}/></button><span>{book.title}</span></div><div className="reader-tools"><button className="icon-button" title="添加书签" aria-label="添加当前段落书签" onClick={() => void addBookmark()}><BookmarkIcon size={18}/></button><button className="icon-button" title="全部书签" aria-label="查看全部书签" onClick={() => setBookmarkList(true)}><List size={18}/></button><button className="icon-button" title="人物管理" aria-label="人物管理" onClick={() => setCharacterPanel(true)}><Users size={18}/></button><button className="ai-toolbar" onClick={() => setAnalysis(true)}><Sparkles size={16}/><span>人物识别</span></button><button className={`icon-button ${appearance ? 'active' : ''}`} aria-label="阅读排版设置" onClick={() => setAppearance(!appearance)}><Settings2 size={20}/></button></div></header>
       {appearance && <div className="appearance-panel"><div className="panel-title">让文字，适合你的眼睛<button className="icon-button" aria-label="关闭排版设置" onClick={() => setAppearance(false)}><X size={17}/></button></div><label>字号 <span>{preferences.fontSize}px</span><input aria-label="字号" type="range" min="14" max="36" value={preferences.fontSize} onChange={e => onPreferences({fontSize:Number(e.target.value)})}/></label><label>行距 <span>{preferences.lineHeight.toFixed(1)}</span><input aria-label="行距" type="range" min="1.3" max="2.6" step="0.1" value={preferences.lineHeight} onChange={e => onPreferences({lineHeight:Number(e.target.value)})}/></label><label>页宽 <span>{preferences.readerWidth}px</span><input aria-label="页宽" type="range" min="420" max="1000" step="20" value={preferences.readerWidth} onChange={e => onPreferences({readerWidth:Number(e.target.value)})}/></label><label>字体<select aria-label="字体" value={preferences.fontFamily} onChange={e => onPreferences({fontFamily:e.target.value as Preferences['fontFamily']})}><option value="serif">宋体 / Georgia</option><option value="sans">黑体 / Sans serif</option></select></label><div className="theme-choices">{(['light','sepia','dark'] as const).map((t,i) => <button key={t} className={`theme-chip ${t} ${preferences.theme === t ? 'chosen' : ''}`} onClick={() => onPreferences({theme:t})}>{['纸白','暖笺','夜读'][i]}{preferences.theme === t && <Check size={13}/>}</button>)}</div><label className="checkbox-row"><input type="checkbox" checked={preferences.showCharacters} onChange={e => onPreferences({showCharacters:e.target.checked})}/>显示对白人物标签</label></div>}

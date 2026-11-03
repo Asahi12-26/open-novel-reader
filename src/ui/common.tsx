@@ -36,10 +36,10 @@ export function Modal({ title, children, onClose, wide = false }: { title: strin
   }, []);
   return <div className="modal-backdrop" onClick={onClose}><div ref={root} className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label={title} onClick={e => e.stopPropagation()}><header><h2>{title}</h2><button className="icon-button" aria-label="关闭" onClick={onClose}><X size={20}/></button></header>{children}</div></div>;
 }
-export function BookCover({ book, shared = true, className = '' }: { book: Book; shared?: boolean; className?: string }) {
+export function BookCover({ book, shared = true, className = '', duration = .38 }: { book: Book; shared?: boolean; className?: string; duration?: number }) {
   const reduced = useReducedMotion();
   const id = book.id.replace(/[^a-zA-Z0-9]/g, '');
-  return <motion.div layoutId={shared ? `cover-${book.id}` : undefined} transition={{ duration: reduced ? 0 : .38, ease: [.22, 1, .36, 1] }} className={`book-cover ${className}`} style={{ background: book.coverColor || '#3d5750' }}>
+  return <motion.div layout layoutId={shared ? `cover-${book.id}` : undefined} transition={{ duration: reduced ? 0 : duration, ease: [.22, 1, .36, 1] }} className={`book-cover ${className}`} style={{ background: book.coverColor || '#3d5750' }}>
     {book.cover ? <img src={book.cover} alt={`${book.title}封面`} loading="lazy"/> : <>
       <div className="cover-edition">阅 见 藏 书 · READER'S EDITION</div>
       <h3>{book.title}</h3><span className="cover-author">{book.author || '佚名'}</span>
