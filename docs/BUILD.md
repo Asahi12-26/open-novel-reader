@@ -2,9 +2,11 @@
 
 ## 已验证产物（2026-11-03）
 
-提交 `e0631fd` 的 [Windows / Android 构建](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41422399968) 已成功生成两个安装文件。Windows x64 NSIS 已在本机实际安装，验证了小说文件导入、阅读、书签、关闭重启后续读，以及从首轮构建覆盖安装修复构建后保留阅读位置与书签。Web 的生产构建与 4 项浏览器冒烟也已通过，并已部署到 [GitHub Pages](https://asahi12-26.github.io/open-novel-reader/)。
+标签 `v0.1.0-beta.1`、提交 `56e47a0` 的 [最终构建与发布](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41715962013)成功。安装文件与校验值见 [Releases](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.1.0-beta.1)。最终 Windows EXE 已实际覆盖安装、启动并恢复原 EPUB 章节；之前的 TXT/EPUB 导入、书签及升级保留数据均通过。40 项测试与 4 项浏览器检查通过，Web 已部署到 [GitHub Pages](https://asahi12-26.github.io/open-novel-reader/)。
 
 Android ARM64 APK 已生成且通过 Google `apksig` v2 签名验证；包名为 `io.github.opennovelreader.app`，versionName 为 `0.1.0-beta.1`，versionCode 为 `1001`，minSDK 为 `26`。它仍是开发签名包，**尚未完成 Android 真机安装、文件选择和阅读验证**。本机未找到 Android SDK 或可用模拟器，没有为验证而安装系统工具链。iOS 尚无安装包。
+
+最终 APK 约 26.8 MiB，开发配置不再附带 Rust DWARF 调试符号。最终证书 SHA256 为 `b6da1f665e1a87edf0cac99798add5a77c02408460d5fae8eb094d277eaaba2e`，与旧 CI 包不同；不能把 debug.keystore 缓存当作稳定签名方案。固定发布签名与真机升级见 [Issue #3](https://github.com/Asahi12-26/open-novel-reader/issues/3)。
 
 ## Web / PWA
 

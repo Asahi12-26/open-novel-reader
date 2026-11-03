@@ -3,10 +3,10 @@
 ## 选择平台
 
 - **Web / PWA：** 打开 [公开阅读器](https://asahi12-26.github.io/open-novel-reader/)，无需注册即可导入小说。首次联网打开并完成应用缓存后可离线再开；浏览器支持时可用菜单中的安装应用功能。
-- **Windows x64：** 从 [成功的原生构建](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41422399968)下载 `windows-x64-installer` 并解压，运行其中的 `.exe`，按向导安装。当前安装程序未做发布者签名；安装、导入、重启续读及本轮覆盖安装保留书籍、章节位置和书签均已验证。
-- **Android ARM64：** 在同一构建页下载 `android-arm64-debug-apk` 并解压，将 `.apk` 传到 ARM64 手机后用系统文件管理器安装。本版最低 Android 8，是开发签名包；尚未完成真机安装验证。
+- **Windows x64：** [下载 EXE 安装程序](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.1.0-beta.1/Open.Novel.Reader_0.1.0-beta.1_x64-setup.exe)，运行并按向导安装。最终包已实测覆盖安装后启动并恢复原 EPUB 章节；书籍、位置和书签保留。安装程序未做发布者签名。
+- **Android ARM64：** [下载 APK](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.1.0-beta.1/app-universal-debug.apk)，传到手机后用文件管理器安装。最低 Android 8，约 26.8 MiB，开发签名；尚未真机验证。**不同 CI 构建的签名已发生变化，旧 CI APK 用户须先在旧版导出备份，不要直接卸载。**
 
-GitHub Actions 下载产物可能需要登录 GitHub。[Releases](https://github.com/Asahi12-26/open-novel-reader/releases) 是版本发布和更新入口。Web、Windows 和 Android 的本机书库分别保存，不会自动共享。
+[发布页与 SHA256 校验文件](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.1.0-beta.1)是后续更新入口；直接下载无需解压 Actions 产物。Web、Windows、Android 的本机书库分别保存，不会自动共享。
 
 ## 导入与阅读
 
@@ -23,7 +23,7 @@ TXT 支持 UTF-8、GB18030 和带 BOM 的 UTF-16。EPUB 目前按文字阅读，
 
 点击书架底部的「导出备份」，或进入「通用与备份 → 导出完整备份」，保存 `.json` 文件。备份包含小说原文、进度、书签及人物数据；不包含 API Key 和账号会话。「恢复备份」先校验数据，再合并到现有书库，保留无关书籍；恢复的书不会因此自动获准上传云端。
 
-清除网站数据、清除应用数据或卸载可能移除本机书库。更新、换设备或更换 Android 签名包前先导出备份，保留原安装环境直至确认恢复成功。当前没有二进制自动更新器。
+清除网站数据、清除应用数据或卸载可能移除本机书库。更新、换设备或更换 Android 签名包前先导出备份，保留原安装环境直至确认恢复成功。当前恢复文件上限为 256 MiB，尚无大书库分卷导出，请同时保留小说原文件。当前没有二进制自动更新器。
 
 ## 可选的账号、同步与 AI
 

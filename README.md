@@ -11,13 +11,13 @@
 | 平台 | 已验证状态 | 使用入口 |
 | --- | --- | --- |
 | Web / PWA | 已公开部署；桌面和手机浏览器冒烟、离线重开通过 | [在线使用](https://asahi12-26.github.io/open-novel-reader/) |
-| Windows x64 | NSIS 安装、文件导入、关闭重启续读及本轮覆盖升级保留书籍 / 位置 / 书签已验证 | [成功构建的安装包产物](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41422399968)中的 `windows-x64-installer` |
-| Android ARM64 | 已成功生成开发签名 APK；尚未完成真机安装验证 | [成功构建的 APK 产物](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41422399968)中的 `android-arm64-debug-apk` |
+| Windows x64 | 最终包已安装、启动并恢复旧章节；导入、续读、书签与覆盖升级已验证 | [下载安装 EXE（约 1.91 MiB）](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.1.0-beta.1/Open.Novel.Reader_0.1.0-beta.1_x64-setup.exe) |
+| Android ARM64 | APK 验签、清单和内置许可检查通过，尚未真机验证 | [下载 APK（约 26.8 MiB）](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.1.0-beta.1/app-universal-debug.apk) |
 | iOS | 保留共享架构，尚无 IPA 构建 | 需要 macOS 和签名条件 |
 
-Actions 产物下载后需先解压；GitHub 可能要求登录。版本发布入口为 [Releases](https://github.com/Asahi12-26/open-novel-reader/releases)。Windows 安装包尚未做 Authenticode 签名；Android 当前是 ARM64 开发签名包，尚未用于应用商店分发。安装、阅读与备份步骤见 [使用指南](docs/USAGE.md)。
+[v0.1.0-beta.1 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.1.0-beta.1)提供直接安装文件、许可附件与 [SHA256 校验值](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.1.0-beta.1/SHA256SUMS.txt)。Windows 未做发布者签名；Android 为开发签名，已观察到不同 CI 构建证书变化，不能保证覆盖旧 CI APK，更新前须在旧版导出备份。安装步骤见 [使用指南](docs/USAGE.md)。
 
-最近一轮远端检查已通过 **26 项单元测试、4 项生产浏览器冒烟测试、TypeScript 检查、生产构建与运行时依赖许可检查**。对应提交、验证记录与剩余工作见 [PROJECT_STATUS.md](PROJECT_STATUS.md)。
+发布标签的远端检查已通过 **40 项测试、4 项生产浏览器冒烟测试、TypeScript、生产构建与依赖许可检查**。本轮按用户选择交付离线版本，云服务后续配置。验证记录与剩余工作见 [PROJECT_STATUS.md](PROJECT_STATUS.md)。
 
 ## 现在可以用什么
 
@@ -47,7 +47,7 @@ npm run build
 npm run preview -- --port 4173
 ```
 
-生产版使用 service worker 缓存应用。首次联网打开并完成缓存后，可离线再次打开；个人小说存于 IndexedDB。浏览器和原生 App 的书库各自独立，清除网站 / 应用数据会移除本地书库，建议定期导出备份。离线缓存测试针对生产版；`npm run dev` 不提供完整 PWA 离线体验。
+Web 生产版通过 service worker 缓存应用，首次联网缓存后可离线再次打开；原生壳使用安装包资源。个人小说均存于本机 IndexedDB，各平台书库独立。清除网站 / 应用数据会移除书库，建议保留原文件并定期导出备份；当前恢复上限为 256 MiB，分卷导出尚未实现。`npm run dev` 不提供完整 PWA 离线体验。
 
 ## 云同步与 AI
 
