@@ -15,6 +15,19 @@ afterAll(async () => { await db.delete(); });
 const novel = () => new File(['第一章 到来\n“你好。”小雨说。\n路边的花开了。\n第二章 归途\n我们一起回家。'], '小雨.txt', { type: 'text/plain' });
 
 describe('local-first persistence', () => {
+  it('restores a missing original on explicit reimport without changing reading data', async () => {
+    const book = await importBook(novel());
+    const chapters = await listChapters(book.id);
+    await saveProgress(book.id, chapters[0].id, 1, 2);
+    await db.bookmarks.put({ id: 'kept-marker', bookId: book.id, chapterId: chapters[0].id, paragraphIndex: 1, label: '我的停靠点', createdAt: 10 });
+    const position = await db.progress.get(book.id);
+    await db.files.delete(book.id);
+    expect(await importBook(novel())).toEqual(book);
+    expect(await (await db.files.get(book.id))!.bytes.text()).toBe(await novel().text());
+    expect(await db.progress.get(book.id)).toEqual(position);
+    expect(await db.bookmarks.get('kept-marker')).toBeDefined();
+    expect(await listChapters(book.id)).toEqual(chapters);
+  });
   it('deduplicates exact files, persists original bytes and stable positions across reopening', async () => {
     const book = await importBook(novel());
     const second = await importBook(novel());

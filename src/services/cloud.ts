@@ -1,4 +1,4 @@
-import { createClient, type Session, type SupabaseClient } from '@supabase/supabase-js';
+import { createClient, type AuthChangeEvent, type Session, type SupabaseClient, type User } from '@supabase/supabase-js';
 import { db } from '../core/db';
 import { MAX_FILE_BYTES, parseEpub, parseTxt } from '../core/parser';
 import { defaultPreferences } from '../types';
@@ -18,7 +18,15 @@ export const CLOUD_FILE_MAX_BYTES = 50 * 1024 * 1024;
 export const CLOUD_BUNDLE_MAX_BYTES = 30 * 1024 * 1024;
 let client: SupabaseClient | null = null;
 let activeSync: Promise<SyncResult> | null = null;
+let activeSyncEpoch = -1;
+let accountEpoch = 0;
+let cachedAuthIdentity: string | null | undefined;
+let stopClientAuth: (() => void) | undefined;
 const CONFIG_KEY = 'onr.cloud.public-config';
+const LEGACY_ORIGIN_KEY = 'onr.cloud.legacy-owner-origin';
+function rememberLegacyOrigin(origin: string) {
+  if (origin && !localStorage.getItem(LEGACY_ORIGIN_KEY)) localStorage.setItem(LEGACY_ORIGIN_KEY, origin);
+}
 
 /** Public Supabase URL/publishable key only. Never store service-role or AI keys here. */
 export function getCloudConfig(): CloudConfig {
@@ -41,6 +49,8 @@ export function configureCloud(url: string, anonKey: string): void {
     try { if (JSON.parse(atob(key.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).role !== 'anon') throw new Error('禁止配置服务端密钥。'); }
     catch { throw new Error('请使用有效的 anon 公钥，不能使用 service_role 密钥。'); }
   } else if (!key.startsWith('sb_publishable_')) throw new Error('请使用 Supabase publishable / anon 公钥。');
+  rememberLegacyOrigin(getCloudConfig().url);
+  accountEpoch++; cachedAuthIdentity = undefined; stopClientAuth?.(); stopClientAuth = undefined;
   if (client) { client.auth.stopAutoRefresh(); void client.removeAllChannels(); }
   localStorage.setItem(CONFIG_KEY, JSON.stringify({ url: parsed.origin, anonKey: key }));
   client = null;
@@ -49,56 +59,219 @@ export function configureCloud(url: string, anonKey: string): void {
 export function getCloudClient(): SupabaseClient {
   const config = getCloudConfig();
   if (!config.url || !config.anonKey) throw new Error('请先配置 Supabase 项目地址和公开密钥。');
-  return client ??= createClient(config.url, config.anonKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, storageKey: 'onr.auth.' + new URL(config.url).host } });
+  if (!client) {
+    rememberLegacyOrigin(config.url);
+    const created = createClient(config.url, config.anonKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, storageKey: 'onr.auth.' + new URL(config.url).host } });
+    client = created;
+    let knownUser: string | null | undefined;
+    const { data } = created.auth.onAuthStateChange((event, session) => {
+      if (client !== created) return;
+      const nextUser = session?.user.id || null;
+      if (event === 'SIGNED_OUT' || (knownUser !== undefined && knownUser !== nextUser)) accountEpoch++;
+      knownUser = nextUser;
+      cachedAuthIdentity = nextUser;
+    });
+    stopClientAuth = () => data.subscription.unsubscribe();
+  }
+  return client;
 }
 export async function getSession(): Promise<Session | null> {
   const config = getCloudConfig();
   if (!config.url || !config.anonKey) return null;
   const { data, error } = await getCloudClient().auth.getSession();
-  if (error) throw new Error(error.message);
+  if (error) throw error;
   return data.session;
 }
-export async function signUp(email: string, password: string) {
-  const { data, error } = await getCloudClient().auth.signUp({ email, password });
-  if (error) throw new Error(error.message);
+export async function getUser(): Promise<User | null> {
+  const config = getCloudConfig();
+  if (!config.url || !config.anonKey) return null;
+  const { data, error } = await getCloudClient().auth.getUser();
+  if (error) throw error;
+  return data.user;
+}
+export async function signUp(email: string, password: string, options?: { emailRedirectTo?: string }) {
+  accountEpoch++;
+  const { data, error } = await getCloudClient().auth.signUp({ email, password, options });
+  if (error) throw error;
   return data;
 }
 export async function signIn(email: string, password: string) {
+  accountEpoch++;
   const { data, error } = await getCloudClient().auth.signInWithPassword({ email, password });
-  if (error) throw new Error(error.message);
+  if (error) throw error;
   return data.session;
 }
 export async function signOut() {
-  const { error } = await getCloudClient().auth.signOut();
-  if (error) throw new Error(error.message);
+  accountEpoch++;
+  const { error } = await getCloudClient().auth.signOut({ scope: 'local' });
+  if (error) throw error;
 }
-export function subscribeAuth(callback: (session: Session | null) => void): () => void {
+export async function requestPasswordReset(email: string, redirectTo: string): Promise<void> {
+  const { error } = await getCloudClient().auth.resetPasswordForEmail(email, { redirectTo });
+  if (error) throw error;
+}
+export async function resendConfirmation(email: string, emailRedirectTo: string): Promise<void> {
+  const { error } = await getCloudClient().auth.resend({ type: 'signup', email, options: { emailRedirectTo } });
+  if (error) throw error;
+}
+export async function updatePassword(password: string): Promise<void> {
+  accountEpoch++;
+  const { error } = await getCloudClient().auth.updateUser({ password });
+  if (error) throw error;
+}
+export async function exchangeCodeForSession(code: string): Promise<Session | null> {
+  accountEpoch++;
+  const { data, error } = await getCloudClient().auth.exchangeCodeForSession(code);
+  if (error) throw error;
+  return data.session;
+}
+export function subscribeAuth(callback: (session: Session | null, event: AuthChangeEvent) => void): () => void {
   const config = getCloudConfig();
   if (!config.url || !config.anonKey) return () => {};
   try {
-    const { data } = getCloudClient().auth.onAuthStateChange((_event, session) => callback(session));
+    const { data } = getCloudClient().auth.onAuthStateChange((event, session) => callback(session, event));
     return () => data.subscription.unsubscribe();
   } catch {
     // Invalid deployment configuration must not prevent opening the offline reader.
     return () => {};
   }
 }
-async function requireUser() {
-  const { data, error } = await getCloudClient().auth.getUser();
-  if (error || !data.user) throw new Error('请先登录后同步。');
-  return data.user;
-}
 const ownerKey = (bookId: string) => `cloud-owner:${bookId}`;
-const linkKey = (userId: string, bookId: string) => `cloud-link:${userId}:${bookId}`;
+const linkKey = (scope: string, bookId: string) => `cloud-link:${scope}:${bookId}`;
+const archiveKey = (scope: string, bookId: string) => `cloud-local-book:${scope}:${bookId}`;
+const accountScope = (origin: string, userId: string) => `${origin}|${userId}`;
+function ownerScope(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value) return undefined;
+  if (value.includes('|')) return value;
+  const origin = localStorage.getItem(LEGACY_ORIGIN_KEY) || getCloudConfig().url;
+  return origin ? accountScope(origin, value) : undefined;
+}
+interface LocalAccountContext {
+  userId: string; origin: string; scope: string;
+  assertLive(): void; assertCurrent(): Promise<void>;
+}
+interface AccountContext extends LocalAccountContext { cloud: SupabaseClient }
+async function captureAccount(verify = true): Promise<AccountContext> {
+  const epoch = accountEpoch;
+  const config = getCloudConfig();
+  const session = await getSession();
+  const assertLive = () => { if (accountEpoch !== epoch || getCloudConfig().url !== config.url) throw new Error('账号或云端配置已切换，本次操作停止。'); };
+  assertLive();
+  if (!session) throw new Error('请先登录后同步。');
+  if (verify) {
+    const { data, error } = await getCloudClient().auth.getUser(session.access_token);
+    assertLive();
+    if (error || data.user?.id !== session.user.id) throw new Error('登录状态已失效，请重新登录。');
+  }
+  const userId = session.user.id;
+  const cloud = createClient(config.url, config.anonKey, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }, global: { headers: { Authorization: `Bearer ${session.access_token}` } } });
+  return { userId, origin: config.url, scope: accountScope(config.url, userId), cloud, assertLive,
+    async assertCurrent() { assertLive(); const current = await getSession(); assertLive(); if (current?.user.id !== userId) throw new Error('账号已切换，本次操作停止。'); },
+  };
+}
+async function readLink(context: AccountContext, bookId: string): Promise<Link | undefined> {
+  const scoped = (await db.settings.get(linkKey(context.scope, bookId)))?.value as Link | undefined;
+  if (scoped) return scoped;
+  if (context.origin === localStorage.getItem(LEGACY_ORIGIN_KEY)) return (await db.settings.get(linkKey(context.userId, bookId)))?.value as Link | undefined;
+}
+function generatedFilePath(book: Book, userId: string): string {
+  return `${userId}/${book.id}/${book.restoredAt ? `restored-${book.restoredAt}/` : ''}original.${book.format}`;
+}
+function allowedFilePath(path: string, book: Book, userId: string): boolean {
+  return path === `${userId}/${book.id}/original.${book.format}` || path === generatedFilePath(book, userId);
+}
+async function currentFilePath(book: Book, userId: string, scope: string): Promise<string> {
+  const scoped = (await db.settings.get(linkKey(scope, book.id)))?.value as Link | undefined;
+  const legacy = !scoped && scope === accountScope(localStorage.getItem(LEGACY_ORIGIN_KEY) || '', userId) ? (await db.settings.get(linkKey(userId, book.id)))?.value as Link | undefined : undefined;
+  const snapshot = (scoped || legacy)?.snapshot;
+  if (snapshot?.file && snapshot.book.restoredAt === book.restoredAt && allowedFilePath(snapshot.file.path, book, userId)) return snapshot.file.path;
+  return generatedFilePath(book, userId);
+}
+/** Local filtering needs no network. Signed-out readers retain access to their device's files. */
+export async function filterBooksForAccount(books: Book[], userId?: string): Promise<Book[]> {
+  if (!userId) return books;
+  const scope = accountScope(getCloudConfig().url, userId);
+  const owners = await db.settings.bulkGet(books.map(book => ownerKey(book.id)));
+  return books.filter((_book, index) => !ownerScope(owners[index]?.value) || ownerScope(owners[index]?.value) === scope);
+}
+async function replaceBookRows(bundle: BookBundle): Promise<void> {
+  const id = bundle.book.id;
+  await db.books.put(bundle.book);
+  for (const [table, rows] of [[db.chapters, bundle.chapters], [db.bookmarks, bundle.bookmarks], [db.characters, bundle.characters], [db.dialogues, bundle.dialogues], [db.corrections, bundle.corrections], [db.jobs, bundle.jobs]] as const) {
+    await table.where('bookId').equals(id).delete();
+    if (rows.length) await (table as typeof db.chapters).bulkPut(rows as Chapter[]);
+  }
+  if (bundle.progress && !bundle.book.deletedAt) await db.progress.put(bundle.progress);
+  else await db.progress.delete(id);
+}
+async function switchLocalBook(context: LocalAccountContext, bookId: string, explicitImport: boolean): Promise<Book> {
+  const originalBook = await db.books.get(bookId);
+  if (!originalBook) throw new Error('本机找不到这本书。');
+  const previousOwner = ownerScope((await db.settings.get(ownerKey(bookId)))?.value);
+  if (previousOwner === context.scope) return originalBook;
+  if (!previousOwner) {
+    await db.transaction('rw', db.books, db.settings, async () => {
+      context.assertLive();
+      if (ownerScope((await db.settings.get(ownerKey(bookId)))?.value)) throw new Error('书籍所属账号已变更，请重试。');
+      await db.settings.put({ id: ownerKey(bookId), value: context.scope });
+      await db.books.update(bookId, { cloudEnabled: false });
+      context.assertLive();
+    });
+    return { ...originalBook, cloudEnabled: false };
+  }
+  const previousUser = previousOwner.slice(previousOwner.lastIndexOf('|') + 1);
+  const before = await bundleBook(originalBook, previousUser, previousOwner);
+  const saved = (await db.settings.get(archiveKey(context.scope, bookId)))?.value as BookBundle | undefined;
+  let selected: BookBundle;
+  if (saved && !(explicitImport && saved.book.deletedAt !== undefined)) selected = { ...saved, book: { ...saved.book, cloudEnabled: explicitImport ? false : saved.book.cloudEnabled } };
+  else {
+    const file = await db.files.get(bookId);
+    if (!file) throw new Error('缺少原文件，无法建立当前账号的独立副本。请重新导入。');
+    const bytes = await file.bytes.arrayBuffer();
+    const parsed = originalBook.format === 'epub' ? await parseEpub(bytes, file.name, bookId) : parseTxt(bytes, file.name, bookId);
+    const now = Date.now();
+    const restoredAt = explicitImport && saved?.book.deletedAt !== undefined ? Math.max(now, saved.book.deletedAt + 1, saved.book.restoredAt || 0) : undefined;
+    selected = { schema: 1, book: { id: bookId, fingerprint: originalBook.fingerprint, format: originalBook.format, title: parsed.title, author: parsed.author, language: parsed.language, cover: parsed.cover, coverColor: originalBook.coverColor, totalWords: parsed.totalWords, chapterCount: parsed.chapters.length, createdAt: now, updatedAt: restoredAt || now, cloudEnabled: false, ...(restoredAt === undefined ? {} : { restoredAt }), ...(!explicitImport && originalBook.deletedAt !== undefined ? { deletedAt: originalBook.deletedAt } : {}) }, chapters: parsed.chapters, bookmarks: [], characters: [], dialogues: [], corrections: [], jobs: [], file: { name: file.name, mime: file.mime, path: `${context.userId}/${bookId}/original.${originalBook.format}` } };
+  }
+  await context.assertCurrent();
+  await db.transaction('rw', [db.books, db.chapters, db.progress, db.bookmarks, db.characters, db.dialogues, db.corrections, db.jobs, db.files, db.settings], async () => {
+    context.assertLive();
+    const current = await db.books.get(bookId);
+    if (!current || ownerScope((await db.settings.get(ownerKey(bookId)))?.value) !== previousOwner || !equal(await bundleBook(current, previousUser, previousOwner), before)) throw new Error('本机阅读数据已更新，请重试导入或同步。');
+    await db.settings.put({ id: archiveKey(previousOwner, bookId), value: before });
+    await replaceBookRows(selected);
+    await db.settings.put({ id: ownerKey(bookId), value: context.scope });
+    context.assertLive();
+  });
+  return selected.book;
+}
+/** Call only after an explicit file import. Account-private annotations are preserved in separate local snapshots. */
+function captureLocalAccount(userId: string): LocalAccountContext {
+  const epoch = accountEpoch; const origin = getCloudConfig().url;
+  const assertLive = () => {
+    if (epoch !== accountEpoch || origin !== getCloudConfig().url || (cachedAuthIdentity !== undefined && cachedAuthIdentity !== userId)) throw new Error('导入期间账号或云端已切换，请重试。');
+  };
+  assertLive();
+  return { userId, origin, scope: accountScope(origin, userId), assertLive, async assertCurrent() { assertLive(); } };
+}
+export async function prepareLocalBookForAccount(bookId: string, userId?: string): Promise<Book> {
+  if (!userId) { const book = await db.books.get(bookId); if (!book) throw new Error('本机找不到这本书。'); return book; }
+  return switchLocalBook(captureLocalAccount(userId), bookId, true);
+}
 
 /** Explicit per-book consent. Turning off stops subsequent uploads; existing cloud copy is retained. */
 export async function setBookCloud(bookId: string, enabled: boolean): Promise<void> {
-  const user = await requireUser();
+  const context = await captureAccount();
   const owner = await db.settings.get(ownerKey(bookId));
-  if (owner && owner.value !== user.id) throw new Error('此书关联另一账号。请导出备份后在独立浏览器配置中使用该账号。');
+  if (ownerScope(owner?.value) && ownerScope(owner?.value) !== context.scope) throw new Error('此书属于另一账号的本机副本。请先在当前账号明确重新导入原文件。');
+  await context.assertCurrent();
   await db.transaction('rw', db.books, db.settings, async () => {
-    if (enabled) await db.settings.put({ id: ownerKey(bookId), value: user.id });
+    context.assertLive();
+    const currentOwner = ownerScope((await db.settings.get(ownerKey(bookId)))?.value);
+    if (currentOwner && currentOwner !== context.scope) throw new Error('书籍所属账号已变更，请重试。');
+    await db.settings.put({ id: ownerKey(bookId), value: context.scope });
     await db.books.update(bookId, { cloudEnabled: enabled, updatedAt: Date.now() });
+    context.assertLive();
   });
 }
 
@@ -166,8 +339,9 @@ export function assertCloudUploadLimits(bundle: BookBundle, originalSize: number
   if (!bundle.book.deletedAt && originalSize > CLOUD_FILE_MAX_BYTES) throw new Error('这本书可继续本地阅读；云同步原文件上限为 50 MiB。本次未上传文件。');
   if (new TextEncoder().encode(JSON.stringify(bundle)).byteLength > CLOUD_BUNDLE_MAX_BYTES) throw new Error('这本书可继续本地阅读；云同步数据包上限为 30 MiB。请减少分析数据或保留本地备份，本次未上传文件。');
 }
-async function bundleBook(book: Book, userId: string): Promise<BookBundle> {
-  if (book.deletedAt) return { schema: 1, book: { ...book, cover: undefined }, chapters: [], bookmarks: [], characters: [], dialogues: [], corrections: [], jobs: [], file: { name: '', mime: '', path: `${userId}/${book.id}/original.${book.format}` } };
+async function bundleBook(book: Book, userId: string, scope = accountScope(getCloudConfig().url, userId)): Promise<BookBundle> {
+  const path = await currentFilePath(book, userId, scope);
+  if (book.deletedAt) return { schema: 1, book: { ...book, cover: undefined }, chapters: [], bookmarks: [], characters: [], dialogues: [], corrections: [], jobs: [], file: { name: '', mime: '', path } };
   const [chapters, progress, bookmarks, characters, dialogues, corrections, jobs, file] = await Promise.all([
     db.chapters.where('bookId').equals(book.id).sortBy('index'), db.progress.get(book.id),
     db.bookmarks.where('bookId').equals(book.id).toArray(), db.characters.where('bookId').equals(book.id).toArray(),
@@ -176,7 +350,7 @@ async function bundleBook(book: Book, userId: string): Promise<BookBundle> {
   ]);
   const sort = <T extends { id: string }>(rows: T[]) => rows.sort((a, b) => a.id.localeCompare(b.id));
   return { schema: 1, book, chapters, progress, bookmarks: sort(bookmarks), characters: sort(characters), dialogues: sort(dialogues), corrections: sort(corrections), jobs: sort(jobs),
-    file: file ? { name: file.name, mime: file.mime, path: `${userId}/${book.id}/original.${book.format}` } : undefined };
+    file: file ? { name: file.name, mime: file.mime, path } : undefined };
 }
 export function validateBundle(value: unknown, id: string): asserts value is BookBundle {
   const b = value as BookBundle;
@@ -206,19 +380,21 @@ export function validateBundle(value: unknown, id: string): asserts value is Boo
   if (b.jobs.some(j => !chapters.has(j.chapterId) || !['queued', 'running', 'paused', 'done', 'failed', 'cancelled'].includes(j.status) || !integer(j.completedChunks) || !integer(j.totalChunks) || j.completedChunks > j.totalChunks || !integer(j.updatedAt) || (j.error !== undefined && !text(j.error, 2000)))) throw new Error('云端任务无效。');
   if (b.file && (!text(b.file.name) || !text(b.file.mime, 200) || !text(b.file.path, 1000))) throw new Error('云端文件记录无效。');
   if (b.book.cover && (!text(b.book.cover, 5 * 1024 * 1024) || !/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(b.book.cover))) throw new Error('云端封面格式无效。');
+  if (b.book.deletedAt !== undefined && b.book.restoredAt !== undefined && b.book.deletedAt < b.book.restoredAt) throw new Error('云端删除标记早于明确恢复，本机数据已保留，请更新客户端后重试。');
   if (b.book.deletedAt && (b.chapters.length || b.dialogues.length || b.bookmarks.length)) throw new Error('删除记录不能包含正文。');
   if (!b.book.deletedAt && (b.chapters.length !== b.book.chapterCount || !b.file)) throw new Error('云端书籍缺少原文件或章节。');
 }
-async function applyBundle(bundle: BookBundle, userId: string, revision: number, expectedLocal?: BookBundle, cloud = getCloudClient()) {
+async function applyBundle(bundle: BookBundle, context: AccountContext, revision: number, expectedLocal?: BookBundle) {
+  const { userId, cloud } = context;
+  context.assertLive();
   const current = await db.books.get(bundle.book.id);
+  const previousOwner = ownerScope((await db.settings.get(ownerKey(bundle.book.id)))?.value);
   if (current && current.fingerprint !== bundle.book.fingerprint) throw new Error('书籍 ID 冲突，已保留本地版本。');
   const id = bundle.book.id;
-  if (bundle.file && bundle.file.path !== `${userId}/${id}/original.${bundle.book.format}`) throw new Error('云端文件路径不匹配。');
+  if (bundle.file && !allowedFilePath(bundle.file.path, bundle.book, userId)) throw new Error('云端文件路径不匹配。');
   let file: BookFile | undefined;
   if (bundle.file && !bundle.book.deletedAt && !(await db.files.get(id))) {
-    const expectedPath = `${userId}/${id}/original.${bundle.book.format}`;
-    if (bundle.file.path !== expectedPath) throw new Error('云端文件路径不匹配。');
-    const { data, error } = await cloud.storage.from('novel-files').download(expectedPath);
+    const { data, error } = await cloud.storage.from('novel-files').download(bundle.file.path);
     if (error) throw new Error('下载原文件失败，请重试。');
     file = { bookId: id, name: bundle.file.name, mime: bundle.file.mime, bytes: data };
   }
@@ -231,10 +407,13 @@ async function applyBundle(bundle: BookBundle, userId: string, revision: number,
     const parsed = bundle.book.format === 'epub' ? await parseEpub(bytes, original.name, id) : parseTxt(bytes, original.name, id);
     if (!equal(parsed.chapters, bundle.chapters)) throw new Error('云端章节与原文件不一致，已保留本地数据。');
   }
+  await context.assertCurrent();
   await db.transaction('rw', [db.books, db.chapters, db.progress, db.bookmarks, db.characters, db.dialogues, db.corrections, db.jobs, db.files, db.settings], async () => {
+    context.assertLive();
+    const latestBook = await db.books.get(id);
+    if ((!current && latestBook) || ownerScope((await db.settings.get(ownerKey(id)))?.value) !== previousOwner) return;
     // Reading/bookmark edits made while a network upload was running must remain local.
     if (expectedLocal) {
-      const latestBook = await db.books.get(id);
       if (latestBook && !equal(await bundleBook(latestBook, userId), expectedLocal)) {
         // Keep the previous merge base until incoming data is actually installed.
         // Advancing it here would treat unseen remote bookmarks as local deletions on the next sync.
@@ -253,8 +432,9 @@ async function applyBundle(bundle: BookBundle, userId: string, revision: number,
     if (bundle.book.deletedAt) await db.progress.delete(id);
     else if (bundle.progress) await db.progress.put(bundle.progress);
     if (file) await db.files.put(file);
-    await db.settings.put({ id: ownerKey(id), value: userId });
-    await db.settings.put({ id: linkKey(userId, id), value: { revision, snapshot: bundle } satisfies Link });
+    await db.settings.put({ id: ownerKey(id), value: context.scope });
+    await db.settings.put({ id: linkKey(context.scope, id), value: { revision, snapshot: bundle } satisfies Link });
+    context.assertLive();
   });
 }
 async function saveRemote(id: string, payload: BookBundle, revision: number, cloud: SupabaseClient): Promise<number> {
@@ -300,6 +480,26 @@ export function mergeProfiles(local: Profile, remote: Profile, base: Profile): P
 async function readLocalProfile(): Promise<Profile> {
   return normalizeProfile({ preferences: (await db.settings.get('preferences'))?.value ?? defaultPreferences, shelves: await db.shelves.toArray() });
 }
+/** Restore only local account snapshots before network requests; signing out preserves the current device view. */
+export async function prepareLocalProfileForAccount(userId?: string): Promise<void> {
+  if (!userId) return;
+  const context = captureLocalAccount(userId);
+  await db.transaction('rw', db.settings, db.shelves, async () => {
+    context.assertLive();
+    const previous = ownerScope((await db.settings.get('cloud-profile-owner'))?.value);
+    if (previous === context.scope) return;
+    const current = await readLocalProfile();
+    const saved = (await db.settings.get(`cloud-local-profile:${context.scope}`))?.value;
+    const selected = previous ? normalizeProfile(saved || emptyProfile()) : current;
+    if (previous) await db.settings.put({ id: `cloud-local-profile:${previous}`, value: current });
+    await db.shelves.clear();
+    if (selected.shelves.length) await db.shelves.bulkPut(selected.shelves);
+    await db.settings.put({ id: 'preferences', value: selected.preferences });
+    await db.settings.put({ id: `cloud-local-profile:${context.scope}`, value: selected });
+    await db.settings.put({ id: 'cloud-profile-owner', value: context.scope });
+    context.assertLive();
+  });
+}
 async function readRemoteProfile(userId: string, cloud: SupabaseClient): Promise<ProfileRow | null> {
   const { data, error } = await cloud.from('reader_profiles').select('payload,revision').eq('user_id', userId).maybeSingle();
   if (error) throw new Error('偏好同步失败；请确认已执行全部数据库迁移：' + error.message);
@@ -307,30 +507,36 @@ async function readRemoteProfile(userId: string, cloud: SupabaseClient): Promise
   if (!Number.isSafeInteger(data.revision) || data.revision < 1) throw new Error('云端偏好版本无效，请更新数据库迁移。');
   return data as ProfileRow;
 }
-async function syncProfile(userId: string, cloud: SupabaseClient, assertAccount: () => Promise<void>) {
-  const profileKey = `cloud-profile:${userId}`;
+async function syncProfile(context: AccountContext) {
+  const { userId, cloud } = context;
+  const assertAccount = () => context.assertCurrent();
+  const profileKey = `cloud-profile:${context.scope}`;
   let row = await readRemoteProfile(userId, cloud);
   await assertAccount();
   await db.transaction('rw', db.settings, db.shelves, async () => {
-    const owner = (await db.settings.get('cloud-profile-owner'))?.value;
-    if (owner === userId) return;
+    context.assertLive();
+    const owner = ownerScope((await db.settings.get('cloud-profile-owner'))?.value);
+    if (owner === context.scope) return;
     const current = await readLocalProfile();
-    const saved = (await db.settings.get(`cloud-local-profile:${userId}`))?.value;
-    const previousOwner = typeof owner === 'string' ? owner : undefined;
-    const selected = selectAccountProfile(current, previousOwner, userId, saved, row?.payload);
+    const saved = (await db.settings.get(`cloud-local-profile:${context.scope}`))?.value;
+    const previousOwner = owner;
+    const selected = selectAccountProfile(current, previousOwner, context.scope, saved, row?.payload);
     if (previousOwner) {
       await db.settings.put({ id: `cloud-local-profile:${previousOwner}`, value: current });
       await db.shelves.clear();
       if (selected.shelves.length) await db.shelves.bulkPut(selected.shelves);
       await db.settings.put({ id: 'preferences', value: selected.preferences });
     }
-    await db.settings.put({ id: 'cloud-profile-owner', value: userId });
+    await db.settings.put({ id: 'cloud-profile-owner', value: context.scope });
+    context.assertLive();
   });
   for (let attempt = 0; attempt < 4; attempt++) {
     if (attempt) row = await readRemoteProfile(userId, cloud);
     await assertAccount();
     const local = await db.transaction('r', db.settings, db.shelves, readLocalProfile);
-    const stored = (await db.settings.get(profileKey))?.value as ProfileLink | Profile | undefined;
+    const scoped = await db.settings.get(profileKey);
+    const legacy = !scoped && context.origin === localStorage.getItem(LEGACY_ORIGIN_KEY) ? await db.settings.get(`cloud-profile:${userId}`) : undefined;
+    const stored = (scoped || legacy)?.value as ProfileLink | Profile | undefined;
     // Prior beta snapshots lacked revisions. Keep their contents as a merge base during upgrade.
     const base = stored ? normalizeProfile('snapshot' in stored ? stored.snapshot : stored) : emptyProfile();
     const remote = row ? normalizeProfile(row.payload) : emptyProfile();
@@ -347,81 +553,127 @@ async function syncProfile(userId: string, cloud: SupabaseClient, assertAccount:
     }
     await assertAccount();
     await db.transaction('rw', db.settings, db.shelves, async () => {
-      if ((await db.settings.get('cloud-profile-owner'))?.value !== userId || !equal(await readLocalProfile(), local)) return;
+      context.assertLive();
+      if (ownerScope((await db.settings.get('cloud-profile-owner'))?.value) !== context.scope || !equal(await readLocalProfile(), local)) return;
       await db.shelves.clear();
       if (payload.shelves.length) await db.shelves.bulkPut(payload.shelves);
       await db.settings.put({ id: 'preferences', value: payload.preferences });
       await db.settings.put({ id: profileKey, value: { snapshot: payload, revision } satisfies ProfileLink });
-      await db.settings.put({ id: `cloud-local-profile:${userId}`, value: payload });
+      await db.settings.put({ id: `cloud-local-profile:${context.scope}`, value: payload });
+      context.assertLive();
     });
     return;
   }
   throw new Error('其他设备正在修改分类与偏好。本机修改已保留，请稍后重试同步。');
 }
 export function syncLibrary(): Promise<SyncResult> {
-  return activeSync ??= performSync().finally(() => { activeSync = null; });
+  if (activeSync && activeSyncEpoch === accountEpoch) return activeSync;
+  const operation = performSync().finally(() => { if (activeSync === operation) activeSync = null; });
+  activeSync = operation; activeSyncEpoch = accountEpoch;
+  return operation;
+}
+async function assertBookAuthorized(context: AccountContext, bookId: string) {
+  await context.assertCurrent();
+  const book = await db.books.get(bookId);
+  const owner = ownerScope((await db.settings.get(ownerKey(bookId)))?.value);
+  context.assertLive();
+  if (!book?.cloudEnabled || owner !== context.scope) throw new Error('这本书的上传许可已取消或所属账号改变，后续同步已停止。');
+}
+async function restoreMissingLocalFile(context: AccountContext, book: Book, remote: BookBundle) {
+  if (book.deletedAt !== undefined || !remote.file || await db.files.get(book.id)) return;
+  if (!allowedFilePath(remote.file.path, remote.book, context.userId)) throw new Error('云端文件路径不匹配。');
+  const { data, error } = await context.cloud.storage.from('novel-files').download(remote.file.path);
+  if (error || !data) throw new Error('原文件下载失败，本机阅读数据已保留。请重试或重新导入原文件。');
+  const fingerprint = [...new Uint8Array(await crypto.subtle.digest('SHA-256', await data.arrayBuffer()))].map(n => n.toString(16).padStart(2, '0')).join('');
+  if (fingerprint !== book.fingerprint) throw new Error('原文件指纹校验失败，未修改本机数据。');
+  await context.assertCurrent();
+  await db.transaction('rw', db.files, db.settings, async () => {
+    context.assertLive();
+    if (ownerScope((await db.settings.get(ownerKey(book.id)))?.value) !== context.scope) return;
+    if (!await db.files.get(book.id)) await db.files.put({ bookId: book.id, name: remote.file!.name, mime: remote.file!.mime, bytes: data });
+    context.assertLive();
+  });
 }
 async function performSync(): Promise<SyncResult> {
-  const user = await requireUser();
-  const session = await getSession();
-  if (!session || session.user.id !== user.id) throw new Error('账号已切换，请重新同步。');
-  const config = getCloudConfig();
-  // Pin the JWT to this operation. Changing the singleton's account mid-upload can never redirect A's book into B's account.
-  const cloud = createClient(config.url, config.anonKey, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }, global: { headers: { Authorization: `Bearer ${session.access_token}` } } });
-  const assertAccount = async () => {
-    const current = await getSession();
-    if (current?.user.id !== user.id || getCloudConfig().url !== config.url) throw new Error('账号或云端配置已切换，本次同步停止。');
-  };
-  const stateId = `library:${user.id}`;
+  const context = await captureAccount();
+  const { userId, cloud } = context;
+  const assertAccount = () => context.assertCurrent();
+  const stateId = `library:${context.scope}`;
   const result: SyncResult = { uploaded: 0, downloaded: 0, conflicts: 0 };
   try {
     if (typeof navigator !== 'undefined' && !navigator.onLine) throw new Error('当前离线；本地修改已保存，联网后可重试同步。');
     const rows: CloudRow[] = [];
     for (let offset = 0; ; offset += 100) {
-      const { data, error } = await cloud.from('reader_records').select('id,payload,revision').eq('user_id', user.id).order('id').range(offset, offset + 99);
+      const { data, error } = await cloud.from('reader_records').select('id,payload,revision').eq('user_id', userId).order('id').range(offset, offset + 99);
       if (error) throw new Error('读取云端书架失败：' + error.message);
       await assertAccount();
       rows.push(...data as CloudRow[]);
       if (data.length < 100) break;
     }
     const remote = new Map(rows.map(r => [r.id, r]));
+    // An account's own prior local snapshot or cloud copy can replace another active local view,
+    // but the foreign account's annotations are archived first and never included in this account's upload.
+    for (const book of await db.books.toArray()) {
+      const owner = ownerScope((await db.settings.get(ownerKey(book.id)))?.value);
+      if (!owner || owner === context.scope) continue;
+      const saved = await db.settings.get(archiveKey(context.scope, book.id));
+      const row = remote.get(book.id);
+      if (!saved && !row) continue;
+      if (row) validateBundle(row.payload, row.id);
+      const switched = await switchLocalBook(context, book.id, false);
+      if (!saved && row) {
+        await applyBundle(row.payload, context, row.revision, await bundleBook(switched, userId));
+        result.downloaded++;
+        remote.delete(book.id);
+      }
+    }
     const books = await db.books.toArray();
     for (const book of books) {
       await assertAccount();
-      const owner = await db.settings.get(ownerKey(book.id));
-      if (!book.cloudEnabled || owner?.value !== user.id) { remote.delete(book.id); continue; }
-      const local = await bundleBook(book, user.id);
+      const owner = ownerScope((await db.settings.get(ownerKey(book.id)))?.value);
+      if (!book.cloudEnabled || owner !== context.scope) { remote.delete(book.id); continue; }
       const row = remote.get(book.id);
-      const link = (await db.settings.get(linkKey(user.id, book.id)))?.value as Link | undefined;
       if (row) validateBundle(row.payload, row.id);
+      if (row && row.payload.book.deletedAt === undefined) await restoreMissingLocalFile(context, book, row.payload);
+      const local = await bundleBook(book, userId);
+      const link = await readLink(context, book.id);
       let chosen = local;
       const localChanged = !link || !equal(local, link.snapshot);
       if (row && (!link || row.revision !== link.revision)) {
         if (!localChanged) {
-          await applyBundle(row.payload, user.id, row.revision, local, cloud); result.downloaded++; remote.delete(book.id); continue;
+          await applyBundle(row.payload, context, row.revision, local); result.downloaded++; remote.delete(book.id); continue;
         }
         chosen = mergeBundles(local, row.payload, link?.snapshot || { ...local, bookmarks: [], characters: [], dialogues: [], corrections: [], jobs: [] });
         result.conflicts++;
       }
-      if (localChanged || (row && row.revision !== link?.revision)) {
+      let missingRemoteFile = false;
+      if (chosen.book.deletedAt === undefined && chosen.file) {
+        await assertBookAuthorized(context, book.id);
+        const exists = await cloud.storage.from('novel-files').exists(chosen.file.path);
+        if (exists.error && ![400, 404].includes(Number((exists.error as { status?: number }).status))) throw new Error('无法确认云端原文件状态，本机数据已保留。');
+        missingRemoteFile = !exists.data;
+      }
+      if (localChanged || missingRemoteFile || (row && row.revision !== link?.revision)) {
         const original = chosen.book.deletedAt ? undefined : await db.files.get(book.id);
         if (!chosen.book.deletedAt && !original) throw new Error('本地原文件缺失。');
         // Validate both limits before any Storage write, including explicit restoration of a deleted cloud copy.
         assertCloudUploadLimits(chosen, original?.bytes.size || 0);
-        if (!chosen.book.deletedAt && chosen.file && (!row || !row.payload.file || row.payload.book.deletedAt)) {
+        if (!chosen.book.deletedAt && chosen.file && (!row || !row.payload.file || row.payload.book.deletedAt || missingRemoteFile)) {
           const fingerprint = [...new Uint8Array(await crypto.subtle.digest('SHA-256', await original!.bytes.arrayBuffer()))].map(n => n.toString(16).padStart(2, '0')).join('');
           if (fingerprint !== chosen.book.fingerprint) throw new Error('本地原文件指纹校验失败，本次未上传文件。请从备份恢复。');
+          await assertBookAuthorized(context, book.id);
           const { error: uploadError } = await cloud.storage.from('novel-files').upload(chosen.file.path, original!.bytes, { upsert: true, contentType: 'application/octet-stream' });
           if (uploadError) throw new Error('原文件上传失败：' + uploadError.message);
         }
-        await assertAccount();
+        await assertBookAuthorized(context, book.id);
         const revision = await saveRemote(book.id, chosen, row?.revision ?? 0, cloud);
         await assertAccount();
-        await applyBundle(chosen, user.id, revision, local, cloud);
+        await applyBundle(chosen, context, revision, local);
         result.uploaded++;
       }
       if (chosen.book.deletedAt && chosen.file) {
         // Repeat idempotently on every sync so a previous failed Storage deletion is retried.
+        await assertBookAuthorized(context, book.id);
         const { error: deleteError } = await cloud.storage.from('novel-files').remove([chosen.file.path]);
         if (deleteError) throw new Error('删除标记已同步，原文件删除失败，请重试。');
       }
@@ -430,10 +682,10 @@ async function performSync(): Promise<SyncResult> {
     for (const row of remote.values()) {
       await assertAccount();
       validateBundle(row.payload, row.id);
-      await applyBundle(row.payload, user.id, row.revision, undefined, cloud); result.downloaded++;
+      await applyBundle(row.payload, context, row.revision); result.downloaded++;
     }
     await assertAccount();
-    await syncProfile(user.id, cloud, assertAccount);
+    await syncProfile(context);
     await db.syncState.put({ id: stateId, updatedAt: Date.now(), lastSyncedAt: Date.now() });
     return result;
   } catch (error) {

@@ -14,12 +14,17 @@ jobs:
   windows:
     runs-on: windows-latest
     timeout-minutes: 45
+    env:
+      VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+      VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+      VITE_PUBLIC_APP_URL: ${{ vars.VITE_PUBLIC_APP_URL || 'https://asahi12-26.github.io/open-novel-reader/' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+      - run: node scripts/check-release-version.mjs
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -40,12 +45,23 @@ jobs:
   android:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+      VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+      VITE_PUBLIC_APP_URL: ${{ vars.VITE_PUBLIC_APP_URL || 'https://asahi12-26.github.io/open-novel-reader/' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+      - run: node scripts/check-release-version.mjs
+      - name: Require persistent signing secrets
+        env:
+          ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: node -e "for (const name of ['ANDROID_KEY_BASE64', 'ANDROID_KEY_ALIAS', 'ANDROID_KEY_PASSWORD']) if (!process.env[name]?.trim()) throw new Error('Missing required Actions secret '+name)"
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -64,20 +80,33 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
-      - uses: actions/cache@v4
-        with:
-          path: ~/.android/debug.keystore
-          key: android-beta-debug-keystore-v1
       - run: npm ci
       - run: npm run tauri -- android init --ci --skip-targets-install
       - run: npm run tauri -- icon src-tauri/icons/icon.png
-      - name: Build installable ARM64 development APK
-        run: npm run tauri -- android build --debug --apk --target aarch64
+      - name: Configure persistent Android release signing
+        run: node scripts/configure-android-signing.mjs
+        env:
+          ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      - name: Build signed ARM64 release APK
+        run: npm run tauri -- android build --apk --target aarch64
+        env:
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      - name: Verify release signature, identity, version and ABI
+        run: node scripts/verify-android-release.mjs
+        env:
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
       - uses: actions/upload-artifact@v4
         with:
-          name: android-arm64-debug-apk
+          name: android-arm64-release-apk
           path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
+      - name: Remove temporary signing material
+        if: always()
+        run: rm -f "$RUNNER_TEMP/open-novel-reader-release.jks"
   prerelease:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [windows, android]
@@ -95,24 +124,24 @@ jobs:
           cp LICENSE THIRD_PARTY_NOTICES.md docs/RUST_DEPENDENCIES.md release-notices/
           cp -R docs/licenses release-notices/third-party
           zip -qr release-artifacts/THIRD_PARTY_LICENSES.zip release-notices
-      - name: Publish Beta assets
+      - name: Prepare download names and checksums
+        run: node scripts/prepare-release.mjs
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+      - name: Publish release assets
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          mapfile -d '' assets < <(find release-artifacts -type f \( -name '*.exe' -o -name '*.apk' \) -print0)
-          if [ "${#assets[@]}" -ne 2 ]; then
-            echo 'Expected exactly one Windows installer and one Android APK.' >&2
-            exit 1
-          fi
-          assets+=(release-artifacts/THIRD_PARTY_LICENSES.zip)
+          mapfile -d '' assets < <(find release-upload -maxdepth 1 -type f -print0)
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
           else
-            gh release create "$RELEASE_TAG" "${assets[@]}" --prerelease --generate-notes --title "Open Novel Reader $RELEASE_TAG" --notes 'Windows installer is not Authenticode-signed. Android APK is a debug-signed ARM64 development build; back up your library before changing signing keys. Native device validation is tracked in PROJECT_STATUS.md.'
+            gh release create "$RELEASE_TAG" "${assets[@]}" --prerelease --generate-notes --title "Open Novel Reader $RELEASE_TAG" --notes 'Windows installer is not Authenticode-signed. Android APK is an ARM64 release build signed with the persistent release key. Older 0.1 debug-signed Android packages cannot be upgraded in place with this certificate: export your library first. Native device validation is tracked in PROJECT_STATUS.md.'
           fi
+          # Verify GitHub retained the exact names covered by SHA256SUMS.txt.
+          gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' > uploaded-assets.txt
           for asset in "${assets[@]}"; do
-            printf '%s  %s\n' "$(sha256sum "$asset" | cut -d ' ' -f 1)" "$(basename "$asset")"
-          done > release-artifacts/SHA256SUMS.txt
-          gh release upload "$RELEASE_TAG" release-artifacts/SHA256SUMS.txt --clobber
+            grep -Fxq "$(basename "$asset")" uploaded-assets.txt
+          done

@@ -13,7 +13,7 @@ vi.mock('../core/db', async importOriginal => {
 vi.mock('@supabase/supabase-js', () => ({ createClient: (_url: string, _key: string, options?: { global?: { headers?: { Authorization?: string } } }) => state.cloud!.client(options?.global?.headers?.Authorization?.replace('Bearer ', '')) }));
 import { db, ReaderDatabase } from '../core/db';
 import { importBook, listChapters, saveProgress, deleteBook, exportBackup, restoreBackup } from '../core/library';
-import { CLOUD_BUNDLE_MAX_BYTES, CLOUD_FILE_MAX_BYTES, configureCloud, setBookCloud, syncLibrary } from './cloud';
+import { CLOUD_BUNDLE_MAX_BYTES, CLOUD_FILE_MAX_BYTES, configureCloud, filterBooksForAccount, prepareLocalBookForAccount, prepareLocalProfileForAccount, setBookCloud, syncLibrary } from './cloud';
 import { defaultPreferences } from '../types';
 
 interface TransportRow { id: string; payload: BookBundle; revision: number }
@@ -21,12 +21,22 @@ const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 /** Transport fake only: actual syncLibrary, import/parser, file verification and two Dexie databases run unchanged.
  * This validates client reconciliation; it does not claim to validate hosted Supabase/Postgres RLS. */
 class MemoryTransport {
-  currentUser = 'account-a';
+  private activeUser = 'account-a';
+  private authListeners = new Set<(event: string, session: { user: { id: string }; access_token: string } | null) => void>();
+  get currentUser() { return this.activeUser; }
+  set currentUser(value: string) {
+    this.activeUser = value;
+    for (const callback of this.authListeners) callback(value ? 'SIGNED_IN' : 'SIGNED_OUT', value ? { user: { id: value }, access_token: value } : null);
+  }
   records = new Map<string, Map<string, TransportRow>>();
   profiles = new Map<string, { payload: { preferences: typeof defaultPreferences; shelves: { id: string; name: string; updatedAt: number; deletedAt?: number }[] }; revision: number }>();
   files = new Map<string, Blob>();
   uploads = 0;
   afterNextSave?: () => Promise<void>;
+  beforeNextGetUser?: () => Promise<void>;
+  afterNextUpload?: () => Promise<void>;
+  afterNextDownload?: () => Promise<void>;
+  beforeNextRemove?: () => Promise<void>;
   beforeNextProfileWrite?: () => Promise<void>;
   afterNextProfileSave?: () => Promise<void>;
   profileWrites = 0;
@@ -39,9 +49,12 @@ class MemoryTransport {
     const user = () => pinnedUser || this.currentUser;
     return {
       auth: {
-        getUser: async () => ({ data: { user: { id: this.currentUser } }, error: null }),
+        getUser: async () => { const id = this.currentUser; const callback = this.beforeNextGetUser; this.beforeNextGetUser = undefined; await callback?.(); return { data: { user: { id } }, error: null }; },
         getSession: async () => ({ data: { session: { user: { id: this.currentUser }, access_token: this.currentUser } }, error: null }),
-        stopAutoRefresh: () => {}, onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => {} } } }),
+        stopAutoRefresh: () => {}, onAuthStateChange: (callback: (event: string, session: { user: { id: string }; access_token: string } | null) => void) => {
+          this.authListeners.add(callback); callback('INITIAL_SESSION', this.currentUser ? { user: { id: this.currentUser }, access_token: this.currentUser } : null);
+          return { data: { subscription: { unsubscribe: () => { this.authListeners.delete(callback); } } } };
+        },
       },
       removeAllChannels: async () => {},
       from: (table: string) => {
@@ -73,9 +86,10 @@ class MemoryTransport {
         return { data: revision, error: null };
       },
       storage: { from: () => ({
-        upload: async (path: string, bytes: Blob) => { this.files.set(path, bytes); this.uploads++; return { error: null }; },
-        download: async (path: string) => ({ data: this.files.get(path), error: this.files.has(path) ? null : { message: 'NOT_FOUND' } }),
-        remove: async (paths: string[]) => { for (const path of paths) this.files.delete(path); return { error: null }; },
+        exists: async (path: string) => ({ data: this.files.has(path), error: null }),
+        upload: async (path: string, bytes: Blob) => { this.files.set(path, bytes); this.uploads++; const callback = this.afterNextUpload; this.afterNextUpload = undefined; await callback?.(); return { error: null }; },
+        download: async (path: string) => { const result = { data: this.files.get(path), error: this.files.has(path) ? null : { message: 'NOT_FOUND' } }; const callback = this.afterNextDownload; this.afterNextDownload = undefined; await callback?.(); return result; },
+        remove: async (paths: string[]) => { const callback = this.beforeNextRemove; this.beforeNextRemove = undefined; await callback?.(); for (const path of paths) this.files.delete(path); return { error: null }; },
       }) },
     };
   }
@@ -252,5 +266,126 @@ describe('two-device client synchronization with an offline transport', () => {
       expect((await db.books.get(book.id))?.deletedAt).toBeGreaterThan(0);
       expect(await db.progress.get(book.id)).toBeUndefined();
     } finally { await fresh.delete(); }
+  });
+  it('keeps same-fingerprint account snapshots private and requires fresh per-account upload consent', async () => {
+    const book = await consentAndUpload(); const chapter = (await listChapters(book.id))[0];
+    await db.books.update(book.id, { title: 'A private title', updatedAt: Date.now() });
+    await db.bookmarks.put({ id: 'only-a', bookId: book.id, chapterId: chapter.id, paragraphIndex: 0, label: 'A private note', createdAt: Date.now() });
+    transport.currentUser = 'account-b';
+    expect(await filterBooksForAccount(await db.books.toArray(), 'account-b')).toEqual([]);
+    await expect(setBookCloud(book.id, true)).rejects.toThrow('重新导入');
+    const prepared = await prepareLocalBookForAccount(book.id, 'account-b');
+    expect(prepared.title).toBe('小雨'); expect(prepared.cloudEnabled).toBe(false);
+    expect(await db.bookmarks.count()).toBe(0);
+    expect((await filterBooksForAccount(await db.books.toArray(), 'account-b')).length).toBe(1);
+    await syncLibrary(); expect(transport.rows('account-b').size).toBe(0);
+    await setBookCloud(book.id, true); await syncLibrary();
+    expect(JSON.stringify(transport.rows('account-b').get(book.id))).not.toContain('A private');
+    await db.bookmarks.put({ id: 'only-b', bookId: book.id, chapterId: chapter.id, paragraphIndex: 0, label: 'B private note', createdAt: Date.now() });
+    transport.currentUser = 'account-a'; await syncLibrary();
+    expect((await db.bookmarks.get('only-a'))?.label).toBe('A private note');
+    expect(await db.bookmarks.get('only-b')).toBeUndefined();
+    expect(JSON.stringify(transport.rows('account-a').get(book.id))).not.toContain('B private');
+    transport.currentUser = 'account-b'; await syncLibrary();
+    expect((await db.bookmarks.get('only-b'))?.label).toBe('B private note');
+    expect(await db.bookmarks.get('only-a')).toBeUndefined();
+  });
+  it('binds cloud choices to project origin as well as the authenticated user id', async () => {
+    const book = await consentAndUpload();
+    configureCloud('https://different-project.supabase.co', 'sb_publishable_test_only');
+    expect(await filterBooksForAccount(await db.books.toArray(), 'account-a')).toEqual([]);
+    await expect(setBookCloud(book.id, true)).rejects.toThrow('重新导入');
+    expect((await filterBooksForAccount(await db.books.toArray())).length).toBe(1);
+  });
+  it('rejects late authentication when granting upload consent after an account change', async () => {
+    const book = await importBook(novel());
+    transport.beforeNextGetUser = async () => { transport.currentUser = 'account-b'; };
+    await expect(setBookCloud(book.id, true)).rejects.toThrow('账号');
+    expect((await db.books.get(book.id))?.cloudEnabled).toBe(false);
+    expect(await db.settings.get(`cloud-owner:${book.id}`)).toBeUndefined();
+  });
+  it('rejects a downloaded bundle if the session changes before it can be installed', async () => {
+    const book = await consentAndUpload(); state.database = deviceB;
+    transport.afterNextDownload = async () => { transport.currentUser = 'account-b'; };
+    await expect(syncLibrary()).rejects.toThrow('账号');
+    expect(await db.books.get(book.id)).toBeUndefined(); expect(await db.files.get(book.id)).toBeUndefined();
+  });
+  it('stops further data writes after upload consent is revoked while a file request is in flight', async () => {
+    const book = await importBook(novel()); await setBookCloud(book.id, true);
+    transport.afterNextUpload = async () => { await setBookCloud(book.id, false); };
+    await expect(syncLibrary()).rejects.toThrow('许可');
+    expect(transport.rows().size).toBe(0); expect((await db.books.get(book.id))?.cloudEnabled).toBe(false);
+  });
+  it('repairs a missing cloud original from an already authorized verified local copy', async () => {
+    const book = await consentAndUpload(); transport.files.clear(); const uploads = transport.uploads;
+    await syncLibrary(); expect(transport.uploads).toBe(uploads + 1);
+    state.database = deviceB; await syncLibrary();
+    expect(await (await db.files.get(book.id))!.bytes.text()).toBe(story);
+  });
+  it('recovers a missing local original without discarding newer local metadata or position', async () => {
+    const book = await consentAndUpload(); const chapter = (await listChapters(book.id))[0];
+    await db.files.delete(book.id); await db.books.update(book.id, { title: 'Keep this local title', updatedAt: Date.now() + 100 });
+    await saveProgress(book.id, chapter.id, 1, 2); await syncLibrary();
+    expect((await db.books.get(book.id))?.title).toBe('Keep this local title');
+    expect((await db.progress.get(book.id))?.paragraphIndex).toBe(1);
+    expect(await (await db.files.get(book.id))!.bytes.text()).toBe(story);
+  });
+  it('cannot remove a newer restored generation with an older late tombstone cleanup', async () => {
+    const book = await consentAndUpload(); const alive = clone(transport.rows().get(book.id)!.payload);
+    const bytes = (await db.files.get(book.id))!.bytes;
+    await deleteBook(book.id);
+    let restoredPath = '';
+    transport.beforeNextRemove = async () => {
+      const row = transport.rows().get(book.id)!; const restoredAt = row.payload.book.deletedAt! + 1;
+      restoredPath = `account-a/${book.id}/restored-${restoredAt}/original.txt`;
+      transport.files.set(restoredPath, bytes);
+      transport.rows().set(book.id, { id: book.id, revision: row.revision + 1, payload: { ...alive, book: { ...alive.book, restoredAt, updatedAt: restoredAt }, file: { ...alive.file!, path: restoredPath } } });
+    };
+    await syncLibrary(); expect(transport.files.has(restoredPath)).toBe(true);
+    expect(transport.rows().get(book.id)?.payload.book.deletedAt).toBeUndefined();
+    await syncLibrary(); expect((await db.books.get(book.id))?.deletedAt).toBeUndefined();
+  });
+  it('prepares a foreign tombstone before import so account B cannot accidentally restore account A', async () => {
+    const book = await consentAndUpload(); await deleteBook(book.id); await syncLibrary();
+    const deletedAt = (await db.books.get(book.id))!.deletedAt;
+    transport.currentUser = 'account-b';
+    const imported = await importBook(novel(), existing => prepareLocalBookForAccount(existing.id, 'account-b'));
+    await prepareLocalBookForAccount(imported.id, 'account-b');
+    expect(imported.cloudEnabled).toBe(false); expect(imported.restoredAt).toBeUndefined();
+    await setBookCloud(imported.id, true); await syncLibrary();
+    expect(transport.rows('account-b').get(book.id)?.payload.book.deletedAt).toBeUndefined();
+    transport.currentUser = 'account-a'; await syncLibrary();
+    expect((await db.books.get(book.id))?.deletedAt).toBe(deletedAt);
+    expect(transport.rows('account-a').get(book.id)?.payload.book.deletedAt).toBe(deletedAt);
+  });
+  it('prepares account-local import snapshots without creating an auth or network client', async () => {
+    const book = await consentAndUpload();
+    transport.currentUser = 'account-b';
+    const client = vi.spyOn(transport, 'client');
+    await prepareLocalBookForAccount(book.id, 'account-b');
+    expect(client).not.toHaveBeenCalled();
+    expect((await db.books.get(book.id))?.cloudEnabled).toBe(false);
+    client.mockRestore();
+  });
+  it('rejects a late local import callback carrying the previous signed-in identity', async () => {
+    const book = await consentAndUpload(); transport.currentUser = 'account-b';
+    await expect(prepareLocalBookForAccount(book.id, 'account-a')).rejects.toThrow('账号');
+    expect((await filterBooksForAccount(await db.books.toArray(), 'account-a')).length).toBe(1);
+  });
+  it('switches categories and preferences entirely locally while retaining both account snapshots', async () => {
+    await prepareLocalProfileForAccount('account-a');
+    await db.shelves.put({ id: 'private-a', name: 'A only category', updatedAt: 1 });
+    await db.settings.put({ id: 'preferences', value: { ...defaultPreferences, theme: 'dark' } });
+    const client = vi.spyOn(transport, 'client');
+    await prepareLocalProfileForAccount('account-b');
+    expect(await db.shelves.count()).toBe(0);
+    expect((await db.settings.get('preferences'))?.value).toMatchObject({ theme: 'light' });
+    await db.shelves.put({ id: 'private-b', name: 'B only category', updatedAt: 2 });
+    await prepareLocalProfileForAccount('account-a');
+    expect((await db.shelves.toArray()).map(s => s.id)).toEqual(['private-a']);
+    expect((await db.settings.get('preferences'))?.value).toMatchObject({ theme: 'dark' });
+    await prepareLocalProfileForAccount('account-b');
+    expect((await db.shelves.toArray()).map(s => s.id)).toEqual(['private-b']);
+    expect(client).not.toHaveBeenCalled(); client.mockRestore();
   });
 });

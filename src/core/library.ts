@@ -4,14 +4,22 @@ import { MAX_FILE_BYTES, parseEpub, parseTxt } from './parser';
 
 const palette = ['#355e56', '#9e674d', '#4c5978', '#a58a52', '#6d526d', '#627a8e'];
 
-export async function importBook(file: File): Promise<Book> {
+export async function importBook(file: File, beforeExisting?: (book: Book) => Promise<unknown>): Promise<Book> {
   if (!/\.(txt|epub)$/i.test(file.name)) throw new Error('请选择 TXT 或无 DRM 的 EPUB 小说。');
   if (file.size > MAX_FILE_BYTES) throw new Error('文件超过 80 MB 限制。请拆分后导入。');
   const bytes = await file.arrayBuffer();
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   const fingerprint = Array.from(new Uint8Array(digest), n => n.toString(16).padStart(2, '0')).join('');
-  const existing = await db.books.where('fingerprint').equals(fingerprint).first();
-  if (existing && existing.deletedAt === undefined) return existing;
+  let existing = await db.books.where('fingerprint').equals(fingerprint).first();
+  // Account views can archive their original snapshot before an explicit import
+  // revives a tombstone. The parser and stored book IDs remain unchanged.
+  if (existing && beforeExisting) { await beforeExisting(existing); existing = await db.books.get(existing.id); }
+  if (existing && existing.deletedAt === undefined) {
+    // Reimport is also the recovery path for a missing original. Keep all
+    // annotations and chapter anchors while restoring only verified bytes.
+    if (!(await db.files.get(existing.id))) await db.files.put({ bookId: existing.id, name: file.name, mime: existing.format === 'epub' ? 'application/epub+zip' : 'text/plain', bytes: new Blob([bytes], { type: file.type }) });
+    return existing;
+  }
   const id = `book-${fingerprint.slice(0, 32)}`;
   const format = /\.epub$/i.test(file.name) ? 'epub' : 'txt';
   const parsed = format === 'epub' ? await parseEpub(bytes, file.name, id) : parseTxt(bytes, file.name, id);

@@ -1,0 +1,26 @@
+import { readFileSync, readdirSync } from 'node:fs';
+import { resolve, join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+
+const root = resolve(import.meta.dirname, '..');
+const config = JSON.parse(readFileSync(join(root, 'src-tauri/tauri.conf.json'), 'utf8'));
+const outputDir = join(root, 'src-tauri/gen/android/app/build/outputs/apk');
+const files = readdirSync(outputDir, { recursive: true }).filter(file => file.endsWith('.apk')).map(file => join(outputDir, file));
+if (files.length !== 1) throw new Error(`Expected one ARM64 release APK; found ${files.length}.`);
+const sdk = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT;
+if (!sdk || !process.env.ANDROID_KEYSTORE_PATH || !process.env.ANDROID_KEY_PASSWORD || !process.env.ANDROID_KEY_ALIAS) throw new Error('Android SDK and signing environment are required for verification.');
+const tools = join(sdk, 'build-tools', '36.0.0');
+const signature = execFileSync(join(tools, 'apksigner'), ['verify', '--verbose', '--print-certs', files[0]], { encoding: 'utf8' });
+const actual = signature.match(/Signer #1 certificate SHA-256 digest:\s*([a-f0-9]+)/i)?.[1].toLowerCase();
+const publicCertificate = execFileSync('keytool', ['-exportcert', '-keystore', process.env.ANDROID_KEYSTORE_PATH, '-alias', process.env.ANDROID_KEY_ALIAS, '-storepass:env', 'ANDROID_KEY_PASSWORD'], { stdio: ['ignore', 'pipe', 'pipe'] });
+const expected = createHash('sha256').update(publicCertificate).digest('hex');
+const pinned = readFileSync(join(root, 'scripts/android-release-certificate.sha256'), 'utf8').trim();
+if (!/^[a-f0-9]{64}$/.test(pinned) || actual !== expected || actual !== pinned) throw new Error('APK signing certificate differs from the pinned persistent release certificate. Do not publish.');
+const badging = execFileSync(join(tools, 'aapt'), ['dump', 'badging', files[0]], { encoding: 'utf8' });
+const manifest = badging.match(/^package: name='([^']+)' versionCode='([^']+)' versionName='([^']+)'/m);
+if (!manifest || manifest[1] !== config.identifier || Number(manifest[2]) !== config.bundle.android.versionCode || manifest[3] !== config.version) throw new Error('APK application id or version differs from the release configuration.');
+if (/^application-debuggable/m.test(badging)) throw new Error('Release APK must not be debuggable.');
+if (!/^native-code: 'arm64-v8a'\s*$/m.test(badging)) throw new Error('Expected only the arm64-v8a ABI.');
+console.log(`Verified signed release APK: ${config.identifier} ${config.version} (${config.bundle.android.versionCode}), arm64-v8a, not debuggable.`);
+console.log(`Public certificate SHA256: ${actual}`);
