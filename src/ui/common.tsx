@@ -1,9 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
 import type { DependencyList, ReactNode } from 'react';
 import { liveQuery } from 'dexie';
-import { motion, useReducedMotion } from 'motion/react';
+import { motion } from 'motion/react';
 import { X } from 'lucide-react';
 import type { Book } from '../types';
+
+// Motion's hook reads the initial setting; the entire transition must also
+// respond when the system preference changes while this page is open.
+export function useMotionPreference() {
+  const [reduced, setReduced] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const changed = () => setReduced(media.matches);
+    changed(); media.addEventListener('change', changed);
+    return () => media.removeEventListener('change', changed);
+  }, []);
+  return reduced;
+}
 
 export function notify(message: string) { window.dispatchEvent(new CustomEvent('reader-notice', { detail: message })); }
 export function useQuery<T>(query: () => Promise<T>, deps: DependencyList, initial: T): T {
@@ -32,12 +45,12 @@ export function Modal({ title, children, onClose, wide = false }: { title: strin
         else if (!e.shiftKey && document.activeElement === items.at(-1)) { e.preventDefault(); items[0].focus(); }
       }
     };
-    document.addEventListener('keydown', key); return () => { document.removeEventListener('keydown', key); before?.focus(); };
+    document.addEventListener('keydown', key); return () => { document.removeEventListener('keydown', key); before?.focus({ preventScroll: true }); };
   }, []);
   return <div className="modal-backdrop" onClick={onClose}><div ref={root} className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label={title} onClick={e => e.stopPropagation()}><header><h2>{title}</h2><button className="icon-button" aria-label="关闭" onClick={onClose}><X size={20}/></button></header>{children}</div></div>;
 }
 export function BookCover({ book, shared = true, className = '', duration = .38 }: { book: Book; shared?: boolean; className?: string; duration?: number }) {
-  const reduced = useReducedMotion();
+  const reduced = useMotionPreference();
   const id = book.id.replace(/[^a-zA-Z0-9]/g, '');
   return <motion.div layout layoutId={shared ? `cover-${book.id}` : undefined} transition={{ duration: reduced ? 0 : duration, ease: [.22, 1, .36, 1] }} className={`book-cover ${className}`} style={{ background: book.coverColor || '#3d5750' }}>
     {book.cover ? <img src={book.cover} alt={`${book.title}封面`} loading="lazy"/> : <>
