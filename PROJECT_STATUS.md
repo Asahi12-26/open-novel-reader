@@ -12,6 +12,8 @@
 - 第三份数据库迁移已备妥。用户已有 Supabase 项目，连接尚未完成；后续须检查 SMTP，默认发信无法支持任意用户邮箱。
 - 已建立固定 Android release 签名与证书固定检查，私钥在本机私有目录。用户已授权保存至 Actions Secrets，但要求先完成独立、可移机、经恢复验证的加密备份；此条件满足前不上传 Secrets。
 - Windows / Android 构建和 Web 均支持同一公开云配置；正式签名构建与新版 Beta 发布需在外部配置及真实检查完成后执行。
+- 候选代码已保存到 `v0.2-cloud-sync`，提交 `467292e7b6bab0e53992941fe648dfb84c9334b8`；[远端 Web 检查](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41914234959)也已通过。main 仍为已交付的动态书海版本，尚未发布 V0.2 安装包。
+- 独立加密备份工具已在 PowerShell 5.1 / 7 验证恢复、错误口令与篡改拒绝。正式交互备份窗口已打开，尚未产生成功凭据，因此 Actions Secrets 尚未写入。用户完成本机口令输入后检查 `%LOCALAPPDATA%/OpenNovelReaderBackups/android-release-backup.receipt.json`，再继续已授权的三项 Secrets 配置；不要再次生成签名钥匙。
 
 下一步：完成签名加密备份 → 保存三项 Actions Secrets；连接用户 Supabase → 迁移 / SMTP / 回调配置 → 真实隔离与双设备检查 → 发布三个平台的 V0.2 Beta。部署入口说明见 [CLOUD_SETUP.md](docs/CLOUD_SETUP.md)。
 
