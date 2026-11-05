@@ -1,6 +1,6 @@
 # PROJECT_STATUS
 
-更新：2026-11-05 · V0.2 Beta 发布验证中
+更新：2026-11-05 · V0.2 Beta 已发布
 
 ## V0.2 本轮交付范围
 
@@ -15,8 +15,11 @@
 - V0.2 已合入 main，采用真实云配置的[本人测试 Web 已部署](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41955978410)。已实际更新旧 Web，现有测试书籍和 17% 阅读位置保留；账号页已显示团队测试邮件范围。
 - [正式签名主线构建](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41990522943)全部成功。APK 通过 Google apksig 独立验签，证书等于固定 pin；应用标识、0.2.0-beta.1 / 2001、ARM64、非调试、禁止明文 HTTP 均通过。Windows 版本与下载摘要通过，未配置 Authenticode。
 - Windows 在独立 WebView2 测试数据目录完成 0.1 → 0.2 实际安装覆盖、启动续读、第三章 41% 进度、书签与暖笺主题保留；动态书海及已配置账号页正常。未访问或清空真实用户书库。
+- 本人已在电脑网页选择测试书上传，并在手机浏览器使用同一账号同步，确认可以接续阅读。该结果为本人实际设备验证，Android APK 原生使用仍待安装后检查。
 
-下一步：发布 V0.2 Beta 安装包 → 本人用同一账号完成 Windows / Android / Web 实际设备使用检查。正式 SMTP 留待开放公网注册前配置，不阻塞本人测试。V0.3 收费 DeepSeek 接入尚未开始。部署入口说明见 [CLOUD_SETUP.md](docs/CLOUD_SETUP.md)。
+- 正式标签 `v0.2.0-beta.1` 指向提交 `85a74039ec7bfa742682b76d7a12c4332b4f11b0`；[标签原生构建与上传](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41992594440)和[标签 Web 检查](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41992594539)全部成功。[Beta 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.2.0-beta.1)四项附件均已从公开入口实际下载，文件名、GitHub 摘要和 SHA256SUMS 一致；APK 证书、清单和内置许可再次独立核验通过。
+
+剩余：Android APK 真机安装、原生账号互通与后续版本覆盖升级；正式 SMTP 留待开放公网注册前配置，不阻塞本人测试。V0.3 收费 DeepSeek 接入尚未开始。部署入口说明见 [CLOUD_SETUP.md](docs/CLOUD_SETUP.md)。
 
 ## 真实云端验收（2026-11-04）
 
@@ -44,9 +47,9 @@
 - 离线 IndexedDB、稳定段落 / 字符位置续读、排版与主题、书签、备份验证恢复。
 - Windows 已验证安装、TXT / EPUB 导入阅读、关闭重启，以及本轮覆盖升级保留书籍、章节位置和书签。
 - 原生壳直接使用安装包资源，跳过 PWA service worker；Web 保留离线缓存与更新提示。
-- Supabase / DeepSeek 接口、两份迁移、逐书上传许可、冲突合并、任务预算与人工纠正已实现；暂不配置云服务，未调用收费模型。
+- Supabase / DeepSeek 接口、逐书上传许可、冲突合并、任务预算与人工纠正已实现；V0.2 云服务已实际部署并验证，未调用收费模型。
 
-## 验证与交付
+## V0.1 历史验证与交付
 
 - 源码标签 v0.1.0-beta.1，提交 56e47a0c9b12cde96ede25ed85835faef8def3bf。
 - [公开 Web / PWA](https://asahi12-26.github.io/open-novel-reader/) 已更新。
@@ -58,15 +61,15 @@
 
 ## 已知限制
 
-- Android 为 ARM64 开发签名包，最低 Android 8，尚未真机验证；不同 CI 证书已发生变化，旧包用户须先备份，固定签名见 [Issue #3](https://github.com/Asahi12-26/open-novel-reader/issues/3)。Windows 未签名，无二进制自动更新器。
+- Android 0.2 为 ARM64 固定发布签名包，最低 Android 8，尚未真机验证；旧 0.1 开发证书不同，须先在旧版导出书库再迁移。后续复用固定钥匙并递增 versionCode。Windows 未做发布者签名，无二进制自动更新器。
 - EPUB 暂不呈现内嵌插图和出版商排版：[Issue #1](https://github.com/Asahi12-26/open-novel-reader/issues/1)。
 - 恢复备份上限 256 MiB，尚无大书库分卷导出，应保留小说原文件：[Issue #2](https://github.com/Asahi12-26/open-novel-reader/issues/2)。
 - 书库为设备级，共用设备请用独立浏览器配置或系统账号；Web / 原生书库分别存储。
-- 云端双账号隔离已验证；邮件链路和收费 AI 尚未联调；密钥仅在会话内存，没有原生钥匙串持久化；iOS 仍需 macOS 与签名。
+- 云端双账号隔离、本人确认邮件及电脑 / 手机网页同步续读已验证；正式 SMTP 与收费 AI 暂缓。AI Key 仅在会话内存，没有原生钥匙串持久化；iOS 仍需 macOS 与签名。
 - 备用 Sites 更新遇 Cloudflare Sandbox 平台请求故障；交付采用正常的 GitHub Pages 入口。
 
 ## 下一步
 
-1. Android 固定发布签名，真机验证导入、阅读、重启、离线与升级；修正后续工作流的附件名校验生成（[Issue #4](https://github.com/Asahi12-26/open-novel-reader/issues/4)）。
+1. Android 真机验证导入、阅读、重启、离线与升级；用已确认账号检查原生设备互通。固定发布签名及最终 ASCII 附件名校验已实现。
 2. 继续 EPUB 排版和大书库备份，不改变既有阅读锚点与数据。
-3. 用户决定启用云服务时再部署 Supabase，运行真实两账号及跨设备检查；只有明确授权具体费用后才调用收费 AI。
+3. 正式开放注册前配置 SMTP；V0.3 再接入真实 DeepSeek，只有明确授权具体费用后才调用收费 AI。

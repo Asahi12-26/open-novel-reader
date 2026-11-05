@@ -6,7 +6,7 @@
 
 ## 当前版本与下载
 
-**0.2.0-beta.1 正在发布。** Web、Windows 和 Android 使用同一真实 Supabase 项目，保留动态书海与离线书库。双账号隔离、三浏览器同步、断网恢复及本人确认邮件已通过；Windows 0.1 → 0.2 覆盖升级保留测试书、第三章 41% 进度、书签和主题；Android 已通过固定证书验签，尚待真机使用验证。
+**0.2.0-beta.1 已发布。** Web、Windows 和 Android 使用同一真实 Supabase 项目，保留动态书海与离线书库。双账号隔离、三浏览器同步、断网恢复、本人确认邮件及电脑 / 手机网页同步续读已通过；Windows 0.1 → 0.2 覆盖升级保留测试书、第三章 41% 进度、书签和主题；Android 已通过固定证书验签，尚待真机使用验证。
 
 当前使用 Supabase 内置团队测试邮件，正式公网注册和完整密码找回暂不开放。已有测试账号可在三个平台登录；自建与配置步骤见 [云服务配置](docs/CLOUD_SETUP.md)。
 
@@ -61,7 +61,7 @@ DeepSeek Key **仅保存在本次会话内存**。Web / 原生目前统一经自
 
 ## 构建与发布
 
-参见 [平台构建](docs/BUILD.md)。CI 已实际生成 Windows NSIS 和 Android ARM64 开发签名 APK，公开 PWA 由 GitHub Pages 部署。main 更新自动执行检查和平台构建，打 `v*` tag 后由工作流创建预发布。未设置自动二进制更新：当前从 Releases 手动获取新版，更新前先备份；本轮 Windows 覆盖升级已验证，Android 真机升级仍待检查。
+参见 [平台构建](docs/BUILD.md)。CI 已实际生成 Windows NSIS 和 Android ARM64 固定发布签名 APK，公开 PWA 由 GitHub Pages 部署。main 更新自动执行检查和平台构建，打 `v*` tag 后由工作流上传预发布安装包。未设置自动二进制更新：当前从 Releases 手动获取新版，更新前先备份；本轮 Windows 覆盖升级已验证，Android 真机升级仍待检查。
 
 ## 代码布局
 

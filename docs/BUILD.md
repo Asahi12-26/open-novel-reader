@@ -6,6 +6,8 @@
 
 独立加密签名备份已由用户实际输入口令并自动恢复核验，随后按授权保存三项 Actions Secrets。固定钥匙未替换。最终附件及校验值以 [0.2 Beta 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.2.0-beta.1)为准。
 
+[正式标签构建与发布](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41992594440)全通过，四项公开附件已实际下载校验。最终 EXE SHA256 为 `efa459bf2950fc989ee483fe92eb97bc09e6fb1b6839f039b02346fb90ecf892`；最终 APK SHA256 为 `06ed1187a734785b2e2e8e6ed56ca9964373eb15c9a2b904c190018f95d8e17f`。这些是标签成品，主线候选构建的文件摘要不同，不能混用。
+
 ## 历史 0.1 产物（2026-11-03）
 
 标签 `v0.1.0-beta.1`、提交 `56e47a0` 的 [最终构建与发布](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41715962013)成功。安装文件与校验值见 [Releases](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.1.0-beta.1)。最终 Windows EXE 已实际覆盖安装、启动并恢复原 EPUB 章节；之前的 TXT/EPUB 导入、书签及升级保留数据均通过。40 项测试与 4 项浏览器检查通过，Web 已部署到 [GitHub Pages](https://asahi12-26.github.io/open-novel-reader/)。
@@ -51,7 +53,7 @@ npm run tauri -- build --bundles nsis --ci
 
 安装程序输出到 `src-tauri/target/release/bundle/nsis/`。默认安装到当前用户目录。未配置 Authenticode 证书，Windows 可能显示未知发布者；当前配置不宣称已签名。CI 的 `windows-x64-installer` artifact 是同样的 NSIS `.exe`。下载后应先核对 GitHub Actions 的成功状态及来源。
 
-下载示例：上述构建运行页 → `windows-x64-installer` → 解压 → 运行 `Open Novel Reader_0.1.0-beta.1_x64-setup.exe`。Windows 更新保留书库的基础流程已经过本机冒烟检查，但更换应用标识、数据源或卸载清理仍可能删除数据，升级前可导出备份。
+开发产物下载：构建运行页 → `windows-x64-installer` → 解压并运行对应版本 EXE。Beta 发布页提供已改为 ASCII 文件名的直接安装包。Windows 0.1 → 0.2 已实际覆盖升级验证，但更换应用标识、数据源或卸载清理仍可能删除数据，升级前可导出备份。
 
 ## Android：0.2 固定发布签名
 
@@ -121,7 +123,7 @@ powershell -File scripts/android-signing.ps1 -Action clear-clipboard
 
 如已安装并登录 GitHub CLI，可用 `powershell -File scripts/android-signing.ps1 -Action github` 一次写入三项 Secrets；值通过标准输入传递。本次本机没有 `gh`、也没有 GitHub token 环境变量，连接器不提供 Secrets 写入接口，因此采用 GitHub 网页配置。tag 缺任一 Secret，Android job 会在安装工具链前明确失败；主线此时只构建未签名候选物。
 
-DPAPI credential 文件只能由本机当前用户解密，复制它不能替代上述可移机加密备份；不要丢失已有私钥后再生成同名文件。证书指纹是公开信息，不能从指纹或 APK 恢复私钥。此处尚未声称用户交互备份、GitHub Secrets 配置或 0.2 签名构建已完成，以实际完成记录与 Actions 结果为准。
+DPAPI credential 文件只能由本机当前用户解密，复制它不能替代上述可移机加密备份；不要丢失已有私钥后再生成同名文件。证书指纹是公开信息，不能从指纹或 APK 恢复私钥。本次已完成用户交互备份、独立恢复核验、GitHub Secrets 配置与 0.2 固定签名构建；新维护者仍须按上述顺序完成自己的安全备份。
 
 ## iOS
 
