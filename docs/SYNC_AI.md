@@ -4,7 +4,7 @@
 
 ## Supabase
 
-1. 创建你自己的 Supabase 项目，在 SQL 编辑器**按文件名顺序执行 `supabase/migrations/` 下全部 3 个迁移**：`202611020001_reader.sql`、`202611030001_profile_revision.sql`、`202611040001_sync_safety.sql`；或使用 Supabase CLI `supabase link --project-ref <ref>` 和 `supabase db push`。已配置旧版数据库的用户只需补执行未应用的新迁移，现有数据会保留。
+1. 创建你自己的 Supabase 项目，在 SQL 编辑器**按文件名顺序执行 `supabase/migrations/` 下全部 4 个迁移**：`202611020001_reader.sql`、`202611030001_profile_revision.sql`、`202611040001_sync_safety.sql`、`202611040002_harden_ddl_helper.sql`；或使用 Supabase CLI `supabase link --project-ref <ref>` 和 `supabase db push`。已配置旧版数据库的用户只需补执行未应用的新迁移，现有数据会保留。
 2. 在 Auth 中启用邮箱登录，配置正式站点 URL、允许的重定向 URL、SMTP 和邮箱确认策略。首次注册后可能需要先点确认邮件。
 3. 在阅读器设置中填写项目 HTTPS URL 和 **publishable / anon 公钥**；也可构建时设置 `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`。绝不能把 service-role/secret key 放进前端。
 4. 在两台设备登录同一个账号，在书籍详情明确勾选云同步，再执行同步。第一次会上传原文件、章节文本及这本书的元数据。没有选择的书不会被上传。
@@ -52,6 +52,6 @@ supabase functions deploy deepseek-proxy
 
 `npm test` 包含无需网络的对白定位、低置信度、授权边界、人工纠错与合并冲突测试。双设备客户端集成测试使用两个独立 Dexie 数据库运行真实的 `syncLibrary`、导入、原文校验与合并代码，仅替换云传输层，覆盖原文件往返、进度与元数据独立更新、在途修改、分类/偏好 CAS 冲突、删除/重新导入恢复、超限零上传及账号切换。这些测试不能代替真实 RLS 验证。`supabase test db` 运行 `supabase/tests/` 下 SQL 测试，验证两个账号之间书籍、偏好、文件隔离及书籍/配置过期写入拒绝。
 
-真正的双设备端到端同步与部署环境 RLS 冒烟需要配置真实 Supabase 实例后执行。没有配置时不得把这些检查描述为已经通过。真实收费模型测试需要使用者授权，不会为测试而自动发起。
+2026-11-04已在项目rqyhreuolusdwsqpfsxr执行26项真实SQL断言，并以两个临时账号、三个独立浏览器调用实际同步代码验证原文件、进度、书签、离线恢复和跨账号访问拒绝，所有测试数据清理后残留为0。这不等于SMTP邮件链路或Android/Windows真机同步已验证，后两项仍须在最终安装包上完成。真实收费模型测试需要使用者授权，不会为测试而自动发起。
 
 参考：[DeepSeek Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/)、[Supabase RLS](https://supabase.com/docs/guides/database/postgres/row-level-security)、[Storage 访问控制](https://supabase.com/docs/guides/storage/security/access-control)、[Edge Function 认证](https://supabase.com/docs/guides/functions/auth)。

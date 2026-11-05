@@ -19,7 +19,15 @@ insert into storage.objects(bucket_id, name) values ('novel-files', '00000000-00
 set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000022","role":"authenticated"}';
 select is((select count(*) from public.reader_records), 0::bigint, 'second account cannot read first records');
 select is((select count(*) from public.reader_profiles), 0::bigint, 'second account cannot read first profile');
-delete from storage.objects where bucket_id = 'novel-files';
+-- Hosted Storage also blocks direct metadata deletion before RLS on current versions.
+-- Keep that protection enabled; the real Storage API negative test covers HTTP deletion.
+do $$ begin
+  begin
+    delete from storage.objects where bucket_id = 'novel-files';
+  exception when insufficient_privilege then
+    if position('Direct deletion from storage tables is not allowed.' in sqlerrm) <> 1 then raise; end if;
+  end;
+end $$;
 set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000021","role":"authenticated"}';
 select is((select count(*) from storage.objects where bucket_id = 'novel-files'), 1::bigint, 'another account cannot delete the restored generation file');
 select is((select payload->'book'->>'restoredAt' from public.reader_records where id = 'restored'), '10', 'failed stale deletion leaves restored payload intact');

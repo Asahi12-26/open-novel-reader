@@ -1,6 +1,6 @@
 # V0.2 云服务连接
 
-本地阅读始终可用。以下步骤完成前，源码和模拟传输检查不代表真实云服务已经上线。
+本地阅读始终可用。本项目已部署真实Supabase并通过26项SQL隔离检查及两账号 / 三浏览器同步检查；邮件投递与原生包仍待完成，V0.2尚未正式发布。
 
 ## 账号维护者需要操作的部分
 
@@ -10,7 +10,7 @@
 
 ## 自动配置范围
 
-- 先检查目标项目现状，保留其他表与既有数据；按名称顺序应用 `supabase/migrations/` 中全部三份迁移。数据库与 Storage 都通过 `auth.uid()` 限制为自己的行 / 文件。
+- 先检查目标项目现状，保留其他表与既有数据；按名称顺序应用 `supabase/migrations/` 中全部四份迁移。数据库与 Storage 都通过 `auth.uid()` 限制为自己的行 / 文件。
 - 私有桶 `novel-files`，文件上限 50 MiB；云数据包上限 30 MiB。小说只有明确选择上传后才进入云端。
 - Site URL：`https://asahi12-26.github.io/open-novel-reader/`。
 - 邮件回调白名单：同一根地址的 `?auth=confirmation` 和 `?auth=recovery`。邮件模板保留默认 `{{ .ConfirmationURL }}`，不要使用 GitHub Pages 不存在的 `/auth/confirm` 路由。

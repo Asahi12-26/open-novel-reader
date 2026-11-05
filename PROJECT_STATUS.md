@@ -8,14 +8,22 @@
 - 补齐邮箱注册 / 确认 / 登录、当前设备退出、找回密码、Web 自动密码恢复表单。原生确认与重置邮件回公开 Web，再用新密码登录原生应用。
 - 复用原同步引擎，增加云项目 + 账号的本地快照隔离、离线分类 / 偏好切换；明确导入后才能把同指纹书变为另一账号自己的独立副本。
 - 阻止晚到下载 / 授权跨账号落库，撤销上传许可后阻止后续保存；缺失原文件可修复；恢复后的文件采用新代际路径，旧墓碑不再删除新恢复文件。
-- 67 项本地测试、TypeScript、生产构建及 10 项浏览器冒烟通过；真实 Supabase 邮件、RLS、双账号及跨平台同步尚未执行，不能据此宣称 V0.2 已交付。
-- 第三份数据库迁移已备妥。用户已有 Supabase 项目，连接尚未完成；后续须检查 SMTP，默认发信无法支持任意用户邮箱。
+- 67 项本地测试、TypeScript、生产构建及 10 项浏览器冒烟通过；真实邮件和原生包仍待验证，不能据此宣称 V0.2 已交付。
+- 已连接免费专用项目 open-novel-reader（rqyhreuolusdwsqpfsxr），四份应用迁移已部署，另启用 pgTAP 测试支持。两表 RLS、私有文件桶、版本触发器正常，数据库安全检查当前零告警。
 - 已建立固定 Android release 签名与证书固定检查，私钥在本机私有目录。用户已授权保存至 Actions Secrets，但要求先完成独立、可移机、经恢复验证的加密备份；此条件满足前不上传 Secrets。
 - Windows / Android 构建和 Web 均支持同一公开云配置；正式签名构建与新版 Beta 发布需在外部配置及真实检查完成后执行。
 - 候选代码已保存到 `v0.2-cloud-sync`，提交 `467292e7b6bab0e53992941fe648dfb84c9334b8`；[远端 Web 检查](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41914234959)也已通过。main 仍为已交付的动态书海版本，尚未发布 V0.2 安装包。
 - 独立加密备份工具已在 PowerShell 5.1 / 7 验证恢复、错误口令与篡改拒绝。正式交互备份窗口已打开，尚未产生成功凭据，因此 Actions Secrets 尚未写入。用户完成本机口令输入后检查 `%LOCALAPPDATA%/OpenNovelReaderBackups/android-release-backup.receipt.json`，再继续已授权的三项 Secrets 配置；不要再次生成签名钥匙。
 
-下一步：完成签名加密备份 → 保存三项 Actions Secrets；连接用户 Supabase → 迁移 / SMTP / 回调配置 → 真实隔离与双设备检查 → 发布三个平台的 V0.2 Beta。部署入口说明见 [CLOUD_SETUP.md](docs/CLOUD_SETUP.md)。
+下一步：用户完成签名备份口令输入 → 保存已授权三项 Actions Secrets；配置 SMTP 并验证真实邮件 → 原生构建与覆盖升级检查 → 发布三个平台的 V0.2 Beta。部署入口说明见 [CLOUD_SETUP.md](docs/CLOUD_SETUP.md)。
+
+## 真实云端验收（2026-11-04）
+
+- 数据库隔离、CAS、版本与恢复时序断言26/26通过，全部回滚，无用户数据残留。
+- 使用实际Web应用与syncLibrary，在两个临时账号、三个独立浏览器环境通过原文件 / 进度 / 书签同步、离线回传、同指纹账号独立副本、跨账号读写删除拒绝、单设备退出不影响另一设备。
+- 临时账号、身份、书籍记录、偏好和Storage文件均已清理，五类残留计数为0；不涉及私人小说，没有trace/HAR/录屏/密码或token落盘。
+- GitHub已保存三个公开构建变量；Supabase Site URL及两条精确邮件回调地址已配置并回读确认。
+- 自定义SMTP当前未启用，未验证真实确认 / 找回密码邮件。控制台临时登录已退出。原生签名Secrets仍未保存，等待用户正式备份。
 
 ## 本轮动态书海
 
@@ -53,7 +61,7 @@
 - EPUB 暂不呈现内嵌插图和出版商排版：[Issue #1](https://github.com/Asahi12-26/open-novel-reader/issues/1)。
 - 恢复备份上限 256 MiB，尚无大书库分卷导出，应保留小说原文件：[Issue #2](https://github.com/Asahi12-26/open-novel-reader/issues/2)。
 - 书库为设备级，共用设备请用独立浏览器配置或系统账号；Web / 原生书库分别存储。
-- 云端双账号隔离与收费 AI 尚未联调；密钥仅在会话内存，没有原生钥匙串持久化；iOS 仍需 macOS 与签名。
+- 云端双账号隔离已验证；邮件链路和收费 AI 尚未联调；密钥仅在会话内存，没有原生钥匙串持久化；iOS 仍需 macOS 与签名。
 - 备用 Sites 更新遇 Cloudflare Sandbox 平台请求故障；交付采用正常的 GitHub Pages 入口。
 
 ## 下一步
