@@ -85,10 +85,12 @@ powershell -File scripts/android-signing.ps1 -Action status
 **先完成独立加密备份，再保存 GitHub Secrets。** 在本机独立 PowerShell 窗口执行：
 
 ```powershell
-powershell -NoProfile -File scripts/android-signing.ps1 -Action backup
+powershell -NoProfile -ExecutionPolicy RemoteSigned -File scripts/android-signing.ps1 -Action backup
 ```
 
 它只在本机以两次 `Read-Host -AsSecureString` 隐藏输入备份口令；不要把口令放进命令参数、聊天或日志。使用独立的长口令（至少 16 字符），保存到自己的密码管理器。默认备份位置 `%LOCALAPPDATA%\OpenNovelReaderBackups` 与签名目录分离，禁止放在项目、工作区、OneDrive 或目录链接内，ACL 仅当前用户与 SYSTEM。
+
+若自动打开的窗口不可见，可自行打开 PowerShell 并进入项目目录执行上述命令；也可在 Windows 运行窗口使用脚本的完整路径，并添加 `-NoExit` 保留结果。`RemoteSigned` 仅用于这一次进程，不修改系统执行策略。看到 `Backup and independent restore verification succeeded` 才表示完成。
 
 容器包含完整 JKS、别名、JKS 密码及公开证书指纹，不依赖原电脑 DPAPI。加密采用随机 32 字节 salt、PBKDF2-HMAC-SHA256 600000 轮派生独立 AES / HMAC 密钥、随机 IV、AES-256-CBC 加密后 HMAC-SHA256 认证；恢复时先恒时核对 MAC 再解密。实现兼容 Windows PowerShell 5.1 和 PowerShell 7，采用 [Microsoft PBKDF2 API](https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.rfc2898derivebytes.-ctor?view=netframework-4.8.1)及 [OWASP 的独立认证建议](https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html)。
 
