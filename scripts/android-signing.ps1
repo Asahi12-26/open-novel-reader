@@ -30,10 +30,23 @@ function Protect-SigningDirectory([string]$Directory = $SigningDirectory) {
     $rights = [Security.AccessControl.FileSystemRights]::FullControl
     $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
     $propagate = [Security.AccessControl.PropagationFlags]::None
-    foreach ($sid in @([Security.Principal.WindowsIdentity]::GetCurrent().User, [Security.Principal.SecurityIdentifier]'S-1-5-18')) {
+    $allowedSids = @([Security.Principal.WindowsIdentity]::GetCurrent().User, [Security.Principal.SecurityIdentifier]'S-1-5-18')
+    foreach ($sid in $allowedSids) {
         $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, $rights, $inherit, $propagate, 'Allow')))
     }
-    Set-Acl -LiteralPath $Directory -AclObject $acl
+    # Avoid inherited PowerShell module paths and Set-Acl's extra audit privileges.
+    if ($PSVersionTable.PSEdition -eq 'Desktop') {
+        [IO.Directory]::SetAccessControl($Directory, $acl)
+        $storedAcl = [IO.Directory]::GetAccessControl($Directory, [Security.AccessControl.AccessControlSections]::Access)
+    } else {
+        [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]$Directory, $acl)
+        $storedAcl = [IO.FileSystemAclExtensions]::GetAccessControl([IO.DirectoryInfo]$Directory, [Security.AccessControl.AccessControlSections]::Access)
+    }
+    $storedRules = @($storedAcl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+    if (!$storedAcl.AreAccessRulesProtected -or $storedRules.Count -ne $allowedSids.Count) { throw 'Private signing directory permissions could not be verified.' }
+    foreach ($rule in $storedRules) {
+        if ($rule.IsInherited -or $rule.IdentityReference.Value -notin $allowedSids.Value -or $rule.AccessControlType -ne 'Allow' -or $rule.FileSystemRights -ne $rights) { throw 'Unexpected private signing directory permission. No backup will be created.' }
+    }
 }
 
 function Read-SigningCredential {
@@ -51,6 +64,9 @@ if ($Action -eq 'backup') {
         $null = Get-OnrPinnedCertificate
         $null = Test-OnrKeystore $keyFile $backupCredential.UserName $backupCredential.GetNetworkCredential().Password
     } finally { $backupCredential = $null }
+    # Check the independent destination and its permissions before private input.
+    $backupPreflightDirectory = Assert-OnrPrivatePath $BackupDirectory -ArchiveDirectory
+    Protect-SigningDirectory $backupPreflightDirectory
     $interactive = !$PSBoundParameters.ContainsKey('BackupPassphrase') -and !$PSBoundParameters.ContainsKey('BackupPassphraseConfirmation')
     if ($interactive) {
         Write-Host 'Choose a long unique backup passphrase. Save it independently in your password manager.'
