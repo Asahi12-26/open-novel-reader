@@ -1,22 +1,22 @@
 # PROJECT_STATUS
 
-更新：2026-11-05 · V0.2 真实云同步本人测试 · 已发布安装包仍为 v0.1.0-beta.1
+更新：2026-11-05 · V0.2 Beta 发布验证中
 
-## V0.2 进行中
+## V0.2 本轮交付范围
 
 - 候选源码版本 0.2.0-beta.1，Android versionCode 2001；保留动态书海和原有本地数据库。
 - 补齐邮箱注册 / 确认 / 登录、当前设备退出、找回密码、Web 自动密码恢复表单。原生确认与重置邮件回公开 Web，再用新密码登录原生应用。
 - 复用原同步引擎，增加云项目 + 账号的本地快照隔离、离线分类 / 偏好切换；明确导入后才能把同指纹书变为另一账号自己的独立副本。
 - 阻止晚到下载 / 授权跨账号落库，撤销上传许可后阻止后续保存；缺失原文件可修复；恢复后的文件采用新代际路径，旧墓碑不再删除新恢复文件。
-- 67 项本地测试、TypeScript、生产构建及 10 项浏览器冒烟通过；Windows 实际运行 / 升级与 Android 签名包及真机检查仍待完成，不能据此宣称 V0.2 已全部交付。
+- 67 项本地测试、TypeScript、生产构建及 10 项浏览器冒烟通过；真实双账号 / 三浏览器、本人确认邮件、Windows 安装升级与 Android 固定证书验签通过。Android 真机及本人账号的原生跨设备使用检查仍待完成。
 - 已连接免费专用项目 open-novel-reader（rqyhreuolusdwsqpfsxr），四份应用迁移已部署，另启用 pgTAP 测试支持。两表 RLS、私有文件桶、版本触发器正常，数据库安全检查当前零告警。
-- 已建立固定 Android release 签名与证书固定检查，私钥在本机私有目录。用户已授权保存至 Actions Secrets，但要求先完成独立、可移机、经恢复验证的加密备份；此条件满足前不上传 Secrets。
-- Windows / Android 构建和 Web 均支持同一公开云配置；正式签名构建与新版 Beta 发布需在外部配置及真实检查完成后执行。
+- 用户已完成独立、可移机的加密备份；脚本实际恢复核验通过，回执、容器 SHA256 与固定证书一致。随后按授权保存三项 Actions Secrets；私钥和签名密码未输出或提交。目录及文件仅当前用户和 SYSTEM 可访问，建议另存加密容器至离线介质。
+- 修复继承 PowerShell 7 模块路径导致 Windows PowerShell 5.1 加载失败、Set-Acl 额外权限依赖及输入口令前缺少预检的问题。PS5.1 / PS7 完整测试备份及恢复均通过，测试回执不能授权 Secrets。
 - V0.2 已合入 main，采用真实云配置的[本人测试 Web 已部署](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41955978410)。已实际更新旧 Web，现有测试书籍和 17% 阅读位置保留；账号页已显示团队测试邮件范围。
-- [原生候选构建](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41986939591)全部成功：Windows 67 项测试、EXE 版本与下载摘要检查通过；Android ARM64 release 模式编译、应用标识、versionCode 2001、非调试清单检查通过。Windows EXE SHA256：`47505685a3fed0c7b9f17379935e4f060ec8d0b76c2fd7cd8ac149428bc88c71`。Android 仍未签名，候选包不进入 Release；尚未发布 V0.2 正式安装包。
-- 独立加密备份工具已在 PowerShell 5.1 / 7 验证恢复、错误口令与篡改拒绝。正式交互备份窗口已打开，尚未产生成功凭据，因此 Actions Secrets 尚未写入。用户完成本机口令输入后检查 `%LOCALAPPDATA%/OpenNovelReaderBackups/android-release-backup.receipt.json`，再继续已授权的三项 Secrets 配置；不要再次生成签名钥匙。
+- [正式签名主线构建](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41990522943)全部成功。APK 通过 Google apksig 独立验签，证书等于固定 pin；应用标识、0.2.0-beta.1 / 2001、ARM64、非调试、禁止明文 HTTP 均通过。Windows 版本与下载摘要通过，未配置 Authenticode。
+- Windows 在独立 WebView2 测试数据目录完成 0.1 → 0.2 实际安装覆盖、启动续读、第三章 41% 进度、书签与暖笺主题保留；动态书海及已配置账号页正常。未访问或清空真实用户书库。
 
-下一步：用户完成签名备份口令输入 → 保存已授权三项 Actions Secrets → 签名原生构建与 Windows 升级检查 → 本人账号实际跨设备检查 → 发布三个平台的 V0.2 Beta。正式 SMTP 留待开放公网注册前配置，不阻塞本轮本人测试。部署入口说明见 [CLOUD_SETUP.md](docs/CLOUD_SETUP.md)。
+下一步：发布 V0.2 Beta 安装包 → 本人用同一账号完成 Windows / Android / Web 实际设备使用检查。正式 SMTP 留待开放公网注册前配置，不阻塞本人测试。V0.3 收费 DeepSeek 接入尚未开始。部署入口说明见 [CLOUD_SETUP.md](docs/CLOUD_SETUP.md)。
 
 ## 真实云端验收（2026-11-04）
 
@@ -24,7 +24,7 @@
 - 使用实际Web应用与syncLibrary，在两个临时账号、三个独立浏览器环境通过原文件 / 进度 / 书签同步、离线回传、同指纹账号独立副本、跨账号读写删除拒绝、单设备退出不影响另一设备。
 - 临时账号、身份、书籍记录、偏好和Storage文件均已清理，五类残留计数为0；不涉及私人小说，没有trace/HAR/录屏/密码或token落盘。
 - GitHub已保存公开云构建变量及team-test邮件提示；Supabase Site URL及两条精确邮件回调地址已配置并回读确认。
-- 按用户选择使用内置团队测试邮件，邮箱确认开启；本人已完成确认邮件，服务端只读验证有一个已确认并登录的账号。正式公网邮件暂缓。控制台临时登录已退出。原生签名Secrets仍未保存，等待用户正式备份。
+- 按用户选择使用内置团队测试邮件，邮箱确认开启；本人已完成确认邮件，服务端只读验证有一个已确认并登录的账号。正式公网邮件暂缓。控制台临时登录已退出。原生签名 Secrets 已在独立备份验证成功后保存。
 
 ## 本轮动态书海
 

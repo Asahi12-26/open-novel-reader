@@ -1,6 +1,12 @@
 # 构建、安装与更新
 
-## 已验证产物（2026-11-03）
+## 0.2 已验证产物（2026-11-05）
+
+[正式签名主线构建](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41990522943)通过。Windows 0.1 → 0.2 在独立测试书库实际覆盖安装，第三章 41% 进度、书签及暖笺主题保留，账号页面已连接同一云项目。Android release APK 已通过 CI 与本地 Google apksig 双重验签，固定证书一致；版本 0.2.0-beta.1 / 2001、ARM64、非调试、禁止明文 HTTP。Android 真机验证仍待完成。
+
+独立加密签名备份已由用户实际输入口令并自动恢复核验，随后按授权保存三项 Actions Secrets。固定钥匙未替换。最终附件及校验值以 [0.2 Beta 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.2.0-beta.1)为准。
+
+## 历史 0.1 产物（2026-11-03）
 
 标签 `v0.1.0-beta.1`、提交 `56e47a0` 的 [最终构建与发布](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41715962013)成功。安装文件与校验值见 [Releases](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.1.0-beta.1)。最终 Windows EXE 已实际覆盖安装、启动并恢复原 EPUB 章节；之前的 TXT/EPUB 导入、书签及升级保留数据均通过。40 项测试与 4 项浏览器检查通过，Web 已部署到 [GitHub Pages](https://asahi12-26.github.io/open-novel-reader/)。
 

@@ -3,10 +3,10 @@
 ## 选择平台
 
 - **Web / PWA：** 打开 [公开阅读器](https://asahi12-26.github.io/open-novel-reader/)，无需注册即可导入小说。首次联网打开并完成应用缓存后可离线再开；浏览器支持时可用菜单中的安装应用功能。
-- **Windows x64：** [下载 EXE 安装程序](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.1.0-beta.1/Open.Novel.Reader_0.1.0-beta.1_x64-setup.exe)，运行并按向导安装。最终包已实测覆盖安装后启动并恢复原 EPUB 章节；书籍、位置和书签保留。安装程序未做发布者签名。
-- **Android ARM64：** [下载 APK](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.1.0-beta.1/app-universal-debug.apk)，传到手机后用文件管理器安装。最低 Android 8，约 26.8 MiB，开发签名；尚未真机验证。**不同 CI 构建的签名已发生变化，旧 CI APK 用户须先在旧版导出备份，不要直接卸载。**
+- **Windows x64：** [下载 EXE 安装程序](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.2.0-beta.1/Open-Novel-Reader_0.2.0-beta.1_windows-x64-setup.exe)，运行并按向导安装。0.1 → 0.2 已实测覆盖升级保留测试书、第三章位置、书签和主题。安装程序未做发布者签名。
+- **Android ARM64：** [下载 APK](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.2.0-beta.1/Open-Novel-Reader_0.2.0-beta.1_android-arm64.apk)，传到手机后用文件管理器安装。最低 Android 8，约 6.85 MiB，固定发布签名；尚未真机验证。**旧 0.1 开发签名不能直接覆盖安装到 0.2，先在旧版导出书库并保留备份，再卸载迁移，勿直接卸载。** 0.2 起后续版本复用同一签名并递增版本号。
 
-[发布页与 SHA256 校验文件](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.1.0-beta.1)是后续更新入口；直接下载无需解压 Actions 产物。Web、Windows、Android 的本机书库分别保存，不会自动共享。
+[发布页与 SHA256 校验文件](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.2.0-beta.1)是后续更新入口；直接下载无需解压 Actions 产物。Web、Windows、Android 的本机书库分别保存，登录同一账号并明确允许上传后才会通过云端同步。
 
 ## 导入与阅读
 
@@ -27,10 +27,12 @@ TXT 支持 UTF-8、GB18030 和带 BOM 的 UTF-16。EPUB 目前按文字阅读，
 
 ## 可选的账号、同步与 AI
 
-本地阅读无需账号。要跨设备同步，请先按 [同步与 AI 部署](SYNC_AI.md)配置自己的 Supabase，在「账号与云同步」填写项目 URL 和 publishable / anon 公钥并登录。只有在每本书的详情中明确选择云同步后，才会上传其原文和文件。退出账号不会删除本机书库；共用设备请使用独立浏览器配置或系统账号。
+本地阅读无需账号。本人测试云项目已内置，使用已确认的测试邮箱在「账号与云同步」登录，三个平台使用同一账号。新注册暂限 Supabase 组织成员邮箱，公开注册与完整密码找回待正式 SMTP 配置后开放。自建用户可在高级选项按 [云服务配置](CLOUD_SETUP.md)填写自己的公开 URL / publishable key。
+
+选择一本小测试书，在详情中允许上传，点击「立即同步」；另一台设备用同一账号登录并同步，检查原文件、章节、书签和阅读设置。断网仍可阅读，恢复连接后继续同步。未选择的本机新书不会自动上传。退出账号不会删除本机书库；共用设备请使用独立浏览器配置或系统账号。
 
 AI 同样需要自己的 Supabase 代理、已登录账号和 DeepSeek API Key。在「AI 模型」中载入密钥，可选择「测试连接（仅查询模型）」。密钥只放本次会话内存，关闭或刷新后需重新输入，不会写入备份或同步记录。
 
 阅读时打开「人物识别」，选择当前章节的模型、查看费用估计并设置预算，勾选本次付费授权后才能启动。默认不分析、不自动重试收费请求；已发送的请求在失败或取消后仍可能被供应商计费。人物标签可点击纠正，人物管理支持新建、改名与合并，人工纠正优先保留。
 
-真实 Supabase 双账号 / 多设备联调与 DeepSeek 收费分析尚未完成；当前没有为用户预置云项目或模型密钥。最新验证范围见 [项目状态](../PROJECT_STATUS.md)。
+真实 Supabase 双账号隔离、三浏览器同步、断网恢复及本人确认邮件已通过；Android 真机与本人账号原生设备互通检查仍待完成。DeepSeek 收费分析尚未执行，也未预置模型密钥。最新验证范围见 [项目状态](../PROJECT_STATUS.md)。
