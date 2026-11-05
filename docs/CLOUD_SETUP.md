@@ -5,7 +5,7 @@
 ## 账号维护者需要操作的部分
 
 1. 在 Codex 添加 Supabase 并连接已有账号，指定用于本阅读器的项目名称。不要在聊天发送数据库密码、service-role、secret key 或个人访问令牌。
-2. 如果项目尚未配置发信，在 Supabase 的 Authentication → Email / SMTP 中配置自己的邮件服务。密码和 SMTP 凭据只在供应商或 Supabase 页面填写。不得为此自动升级套餐。默认发信仅能发给项目组织成员，不能用作公开注册与找回密码服务。
+2. 当前按维护者选择使用 Supabase 内置测试邮件，邮箱确认保持开启。请用 Supabase 项目组织成员邮箱在阅读器注册，查收确认邮件后登录；避免反复发送触发限额。正式公网注册与完整密码找回尚不开放，开放前再在 Authentication → Email / SMTP 配置邮件服务。密码和 SMTP 凭据只在供应商或 Supabase 页面填写，不得自动升级套餐。没有正式 SMTP 不影响当前本人账号同步测试。
 3. 签名加密备份口令只在本机备份窗口输入，保留该口令和生成的备份文件；不要贴入聊天。建议再将加密备份文件复制到自己的离线介质。
 
 ## 自动配置范围
@@ -14,7 +14,7 @@
 - 私有桶 `novel-files`，文件上限 50 MiB；云数据包上限 30 MiB。小说只有明确选择上传后才进入云端。
 - Site URL：`https://asahi12-26.github.io/open-novel-reader/`。
 - 邮件回调白名单：同一根地址的 `?auth=confirmation` 和 `?auth=recovery`。邮件模板保留默认 `{{ .ConfirmationURL }}`，不要使用 GitHub Pages 不存在的 `/auth/confirm` 路由。
-- 三个平台的公开构建参数：`VITE_SUPABASE_URL`、`VITE_SUPABASE_ANON_KEY`（publishable / anon 公钥）、`VITE_PUBLIC_APP_URL`。服务端私钥不得打包进前端。
+- 三个平台的公开构建参数：`VITE_SUPABASE_URL`、`VITE_SUPABASE_ANON_KEY`（publishable / anon 公钥）、`VITE_PUBLIC_APP_URL`。当前 `VITE_AUTH_EMAIL_MODE=team-test` 会显示内置邮件测试范围；自行配置正式 SMTP 后可留空。服务端私钥不得打包进前端。
 - GitHub 签名只保存为 Actions 加密 Secrets：`ANDROID_KEY_BASE64`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`。脚本在缺失凭据或证书与固定指纹不同的情况下拒绝发布。
 
 ## 必要真实验证

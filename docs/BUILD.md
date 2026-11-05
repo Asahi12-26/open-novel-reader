@@ -64,6 +64,8 @@ node scripts/verify-android-release.mjs
 
 结果位于 `src-tauri/gen/android/app/build/outputs/apk/`。最低 Android 8（API 26），CI 生成仅含 `arm64-v8a` 的 release APK；artifact 为 `android-arm64-release-apk`。下载解压后用系统文件管理器安装，或 `adb install -r <apk>`。release 模式关闭 `debuggable` 和明文 HTTP；尚未完成真机验证，也未提交 Play Store。
 
+签名 Secrets 尚未齐全时，main / 手动分支构建仍编译 release 模式，但只上传 `android-arm64-unsigned-candidate-apk`，仅用于确认编译及 app id、版本、ARM64、非调试标记。这是未签名候选物，不能作为可安装包或 Release 下载。tag 缺任一 Secret 必须失败；只有固定签名和证书验证通过的 tag 才能发布。Secrets 齐全后主线自动走签名流程，不生成临时密钥。
+
 从 0.2 开始使用一份专用发布 JKS，CI 从 GitHub Actions Secrets 恢复到 runner 临时目录，构建后删除；不再依赖 debug.keystore 缓存，也不会缺密钥时自动生成替代品。公开证书 SHA256 固定在 `scripts/android-release-certificate.sha256`：`d72345d97d1478b4013b9187d729dc23005f5ad70cdf8551b67cc20686454e8b`。构建后通过 Android 官方 `apksigner` 校验证书、签名，通过 `aapt` 校验 app id、版本、ARM64 和非调试标记；与固定证书不符则禁止上传 artifact。
 
 **旧 0.1 debug 包不能直接覆盖升级为此 release 证书。** 最终 0.1 Beta 的证书为 `b6da1f665e1a87edf0cac99798add5a77c02408460d5fae8eb094d277eaaba2e`，没有在本机找到它的私钥。先在旧应用导出书库，保留备份，再处理卸载与新安装；不要以为保留相同包名就会接受不同签名。自 0.2 首次安装该发布证书后，后续版本持续复用同一私钥并递增 versionCode，才具备常规覆盖升级的签名条件。
@@ -109,7 +111,7 @@ powershell -File scripts/android-signing.ps1 -Action copy-secret -Secret ANDROID
 powershell -File scripts/android-signing.ps1 -Action clear-clipboard
 ```
 
-如已安装并登录 GitHub CLI，可用 `powershell -File scripts/android-signing.ps1 -Action github` 一次写入三项 Secrets；值通过标准输入传递。本次本机没有 `gh`、也没有 GitHub token 环境变量，连接器不提供 Secrets 写入接口，因此采用 GitHub 网页配置。缺任一 Secret，Android job 会在安装工具链前明确失败。
+如已安装并登录 GitHub CLI，可用 `powershell -File scripts/android-signing.ps1 -Action github` 一次写入三项 Secrets；值通过标准输入传递。本次本机没有 `gh`、也没有 GitHub token 环境变量，连接器不提供 Secrets 写入接口，因此采用 GitHub 网页配置。tag 缺任一 Secret，Android job 会在安装工具链前明确失败；主线此时只构建未签名候选物。
 
 DPAPI credential 文件只能由本机当前用户解密，复制它不能替代上述可移机加密备份；不要丢失已有私钥后再生成同名文件。证书指纹是公开信息，不能从指纹或 APK 恢复私钥。此处尚未声称用户交互备份、GitHub Secrets 配置或 0.2 签名构建已完成，以实际完成记录与 Actions 结果为准。
 

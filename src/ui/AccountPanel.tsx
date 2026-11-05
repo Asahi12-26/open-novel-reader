@@ -59,6 +59,7 @@ export default function AccountPanel({ onSignedOut }: { onSignedOut: () => void 
   };
   return <div className="account-panel">
     <div className="info-note"><Cloud size={22}/><p>登录同一账号，在不同设备继续阅读。首次同步前，请在每本书的详情中允许上传；本地阅读始终无需账号。</p></div>
+    {import.meta.env.VITE_AUTH_EMAIL_MODE === 'team-test' && <p className="auth-native-note" role="note">当前为内置邮件测试阶段：请使用 Supabase 项目组织成员邮箱注册，查收并确认邮件后再登录，避免反复发送。正式公网注册和完整密码找回暂不开放。</p>}
     {!configured && <div className="auth-message" role="status">当前版本尚未连接账号服务。你仍可离线阅读；服务配置完成后即可注册和同步。</div>}
     <details className="auth-config" open={!configured || undefined}>
       <summary>{configured ? '高级：使用自己的云服务' : '配置云服务'}</summary>

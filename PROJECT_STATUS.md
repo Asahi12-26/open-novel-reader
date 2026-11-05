@@ -12,18 +12,18 @@
 - 已连接免费专用项目 open-novel-reader（rqyhreuolusdwsqpfsxr），四份应用迁移已部署，另启用 pgTAP 测试支持。两表 RLS、私有文件桶、版本触发器正常，数据库安全检查当前零告警。
 - 已建立固定 Android release 签名与证书固定检查，私钥在本机私有目录。用户已授权保存至 Actions Secrets，但要求先完成独立、可移机、经恢复验证的加密备份；此条件满足前不上传 Secrets。
 - Windows / Android 构建和 Web 均支持同一公开云配置；正式签名构建与新版 Beta 发布需在外部配置及真实检查完成后执行。
-- 候选代码已保存到 `v0.2-cloud-sync`，提交 `467292e7b6bab0e53992941fe648dfb84c9334b8`；[远端 Web 检查](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41914234959)也已通过。main 仍为已交付的动态书海版本，尚未发布 V0.2 安装包。
+- V0.2 候选将合入 main，发布采用真实云配置的本人测试 Web，并构建 Windows；[远端 Web 检查](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41914234959)已通过。Android 无签名时只做 release 模式编译检查，未签名候选不进入 Release。尚未发布 V0.2 正式安装包。
 - 独立加密备份工具已在 PowerShell 5.1 / 7 验证恢复、错误口令与篡改拒绝。正式交互备份窗口已打开，尚未产生成功凭据，因此 Actions Secrets 尚未写入。用户完成本机口令输入后检查 `%LOCALAPPDATA%/OpenNovelReaderBackups/android-release-backup.receipt.json`，再继续已授权的三项 Secrets 配置；不要再次生成签名钥匙。
 
-下一步：用户完成签名备份口令输入 → 保存已授权三项 Actions Secrets；配置 SMTP 并验证真实邮件 → 原生构建与覆盖升级检查 → 发布三个平台的 V0.2 Beta。部署入口说明见 [CLOUD_SETUP.md](docs/CLOUD_SETUP.md)。
+下一步：部署本人测试 Web / Windows → 用户用组织成员邮箱确认测试账号；用户完成签名备份口令输入 → 保存已授权三项 Actions Secrets → 签名原生构建与覆盖升级检查 → 发布三个平台的 V0.2 Beta。正式 SMTP 留待开放公网注册前配置，不阻塞本轮本人测试。部署入口说明见 [CLOUD_SETUP.md](docs/CLOUD_SETUP.md)。
 
 ## 真实云端验收（2026-11-04）
 
 - 数据库隔离、CAS、版本与恢复时序断言26/26通过，全部回滚，无用户数据残留。
 - 使用实际Web应用与syncLibrary，在两个临时账号、三个独立浏览器环境通过原文件 / 进度 / 书签同步、离线回传、同指纹账号独立副本、跨账号读写删除拒绝、单设备退出不影响另一设备。
 - 临时账号、身份、书籍记录、偏好和Storage文件均已清理，五类残留计数为0；不涉及私人小说，没有trace/HAR/录屏/密码或token落盘。
-- GitHub已保存三个公开构建变量；Supabase Site URL及两条精确邮件回调地址已配置并回读确认。
-- 自定义SMTP当前未启用，未验证真实确认 / 找回密码邮件。控制台临时登录已退出。原生签名Secrets仍未保存，等待用户正式备份。
+- GitHub已保存公开云构建变量及team-test邮件提示；Supabase Site URL及两条精确邮件回调地址已配置并回读确认。
+- 按用户选择使用内置团队测试邮件，邮箱确认开启；真实投递待本人账号验证，正式公网邮件暂缓。控制台临时登录已退出。原生签名Secrets仍未保存，等待用户正式备份。
 
 ## 本轮动态书海
 

@@ -8,6 +8,7 @@ if (process.env.RELEASE_TAG !== `v${version}`) throw new Error('Release tag must
 const input = join(root, 'release-artifacts');
 const output = join(root, 'release-upload');
 const binaries = readdirSync(input, { recursive: true }).filter(file => /\.(exe|apk)$/.test(file));
+if (binaries.some(file => /unsigned|candidate/i.test(file))) throw new Error('Unsigned compile candidates cannot be included in release assets.');
 const windows = binaries.filter(file => file.endsWith('.exe'));
 const android = binaries.filter(file => file.endsWith('.apk'));
 if (windows.length !== 1 || android.length !== 1) throw new Error('Expected exactly one Windows installer and one Android APK.');
