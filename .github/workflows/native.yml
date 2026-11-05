@@ -14,11 +14,6 @@ jobs:
   windows:
     runs-on: windows-latest
     timeout-minutes: 45
-    env:
-      VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
-      VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
-      VITE_PUBLIC_APP_URL: ${{ vars.VITE_PUBLIC_APP_URL || 'https://asahi12-26.github.io/open-novel-reader/' }}
-      VITE_AUTH_EMAIL_MODE: ${{ vars.VITE_AUTH_EMAIL_MODE }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -33,6 +28,11 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run tauri -- build --bundles nsis --ci
+        env:
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+          VITE_PUBLIC_APP_URL: ${{ vars.VITE_PUBLIC_APP_URL || 'https://asahi12-26.github.io/open-novel-reader/' }}
+          VITE_AUTH_EMAIL_MODE: ${{ vars.VITE_AUTH_EMAIL_MODE }}
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64-installer
@@ -48,11 +48,6 @@ jobs:
     timeout-minutes: 60
     outputs:
       signed: ${{ steps.signing.outputs.enabled }}
-    env:
-      VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
-      VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
-      VITE_PUBLIC_APP_URL: ${{ vars.VITE_PUBLIC_APP_URL || 'https://asahi12-26.github.io/open-novel-reader/' }}
-      VITE_AUTH_EMAIL_MODE: ${{ vars.VITE_AUTH_EMAIL_MODE }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -107,6 +102,10 @@ jobs:
       - name: Build ARM64 release-mode APK
         run: npm run tauri -- android build --apk --target aarch64
         env:
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+          VITE_PUBLIC_APP_URL: ${{ vars.VITE_PUBLIC_APP_URL || 'https://asahi12-26.github.io/open-novel-reader/' }}
+          VITE_AUTH_EMAIL_MODE: ${{ vars.VITE_AUTH_EMAIL_MODE }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
       - name: Verify release signature, identity, version and ABI
