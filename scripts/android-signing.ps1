@@ -37,13 +37,20 @@ function Protect-SigningDirectory([string]$Directory = $SigningDirectory) {
 }
 
 function Read-SigningCredential {
-    if (!(Test-Path -LiteralPath $keyFile) -or !(Test-Path -LiteralPath $credentialFile)) { throw 'Signing material is incomplete. Run init once, or restore your existing secure backup; do not replace a published signing key.' }
+    if (!(Test-Path -LiteralPath $keyFile -PathType Leaf) -or !(Test-Path -LiteralPath $credentialFile -PathType Leaf)) { throw "Signing material is incomplete in '$SigningDirectory'. Use -SigningDirectory to select the original signing material, or restore your existing secure backup. Do not generate a replacement key." }
     return Import-Clixml -LiteralPath $credentialFile
 }
 
 . (Join-Path $PSScriptRoot 'android-signing-backup.ps1')
 
 if ($Action -eq 'backup') {
+    # Validate the existing source before asking the user for a backup passphrase.
+    $backupCredential = Read-SigningCredential
+    try {
+        $null = Get-Command keytool -ErrorAction Stop
+        $null = Get-OnrPinnedCertificate
+        $null = Test-OnrKeystore $keyFile $backupCredential.UserName $backupCredential.GetNetworkCredential().Password
+    } finally { $backupCredential = $null }
     $interactive = !$PSBoundParameters.ContainsKey('BackupPassphrase') -and !$PSBoundParameters.ContainsKey('BackupPassphraseConfirmation')
     if ($interactive) {
         Write-Host 'Choose a long unique backup passphrase. Save it independently in your password manager.'
