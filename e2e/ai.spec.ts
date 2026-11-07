@@ -49,7 +49,7 @@ async function loadKey(page: Page) {
 
 async function openAnalysis(page: Page) {
   const reader = page.getByRole('dialog', { name: `阅读 ${bookName}`, exact: true });
-  await reader.getByRole('button', { name: '人物识别', exact: true }).click();
+  await reader.getByRole('button', { name: '章节人物识别', exact: true }).click();
   return page.getByRole('dialog', { name: '听见故事里的人', exact: true });
 }
 
@@ -65,7 +65,7 @@ test('offline AI UI requires consent and resumes saved work after reload without
   const settings = page.getByRole('dialog', { name: '你的阅读空间', exact: true });
   await settings.getByRole('button', { name: 'AI 模型', exact: true }).click();
   await settings.getByRole('button', { name: '检查代理（不调用模型）', exact: true }).click();
-  await expect(settings.getByText('代理已连接，登录验证通过。尚未调用 DeepSeek。', { exact: true })).toBeVisible();
+  await expect(settings.getByText('代理检查通过，登录正常。本次检查未访问 DeepSeek。', { exact: true })).toBeVisible();
   expect(fixture.statusCalls).toBe(1); expect(fixture.requests).toHaveLength(0);
   await settings.getByRole('button', { name: '关闭', exact: true }).click();
   await loadKey(page);
