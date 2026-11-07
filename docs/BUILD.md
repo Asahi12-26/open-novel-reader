@@ -2,13 +2,13 @@
 
 ## 0.3 本轮候选（2026-11-07）
 
-版本 `0.3.0-beta.1`，Android versionCode `3001`，沿用 0.2 的固定发布证书、应用标识和 HTTPS WebView origin；数据库仍为 Dexie v1，不清空或重建。95 项单元 / 离线测试通过。目标为 [V0.3 Beta 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.3.0-beta.1)，只有构建成功并实际附加的文件才是可用安装包，本节不表示附件已生成。
+版本 `0.3.0-beta.1`，Android versionCode `3001`，沿用 0.2 的固定发布证书、应用标识和 HTTPS WebView origin；数据库仍为 Dexie v1，不清空或重建。主线候选 `41a8647` 的 95 项单元 / 离线测试、11 项浏览器流程及 Windows / Android CI 构建全部通过。Windows 隔离书库 0.2 → 0.3 覆盖安装返回 0，保留 1 本测试书、第三章 41%、1 个书签与暖笺主题。Android 真机覆盖升级保留原登录、书库和第三章 88%，书签、冷重启、完全断网正文、恢复联网同步和非收费代理检查均通过，网络已原样恢复。 目标为 [V0.3 Beta 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.3.0-beta.1)，候选包已构建验证，正式标签和附件尚未发布。
 
-真实 AI 代理已部署并完成不调用 DeepSeek 的登录鉴权检查；真实收费推理尚未执行、未验证。Android 0.2 本人登录通过，原生同步、重启与离线检查进行中；0.2 → 0.3 覆盖升级须用最终包另行确认。历史构建记录如下。
+原创短章 Flash 真实推理最小验证通过：完成 1/1 分片，3 句对白全部归属到 2 名人物，0 未知，1 处人工确认重新打开后仍保存。测试结束已清除会话内存密钥；整本书与复杂人物的识别准确率仍待扩展验证，后续收费调用需另行授权。 历史构建记录如下。
 
 ## 历史 0.2 已验证产物（2026-11-05）
 
-[正式签名主线构建](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41990522943)通过。Windows 0.1 → 0.2 在独立测试书库实际覆盖安装，第三章 41% 进度、书签及暖笺主题保留，账号页面已连接同一云项目。Android release APK 已通过 CI 与本地 Google apksig 双重验签，固定证书一致；版本 0.2.0-beta.1 / 2001、ARM64、非调试、禁止明文 HTTP。Android 真机验证仍待完成。
+[正式签名主线构建](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41990522943)通过。Windows 0.1 → 0.2 在独立测试书库实际覆盖安装，第三章 41% 进度、书签及暖笺主题保留，账号页面已连接同一云项目。Android release APK 已通过 CI 与本地 Google apksig 双重验签，固定证书一致；版本 0.2.0-beta.1 / 2001、ARM64、非调试、禁止明文 HTTP。后续真机结果见上方 V0.3 记录。
 
 独立加密签名备份已由用户实际输入口令并自动恢复核验，随后按授权保存三项 Actions Secrets。固定钥匙未替换。最终附件及校验值以 [0.2 Beta 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.2.0-beta.1)为准。
 
@@ -43,7 +43,7 @@ GitHub 仓库 Settings → Pages → Source 选择 **GitHub Actions** 后，`Pub
 
 本项目用一份 React 前端 + Tauri 2 壳覆盖 Windows、Android，预留 iOS，不额外引入 Capacitor。Tauri 官方提供桌面和移动构建；阅读采用系统 WebView 的文件选择与 IndexedDB，因此不需要申请全盘读写权限。桌面 HTML 拖拽通过 `dragDropEnabled: false` 放行。Windows 使用 WebView2；Android 使用系统 Android System WebView，建议保持最新。
 
-该选择仍需在实际 Android 设备上检查系统文件选择器、恢复阅读和离线行为；配置存在不等于设备兼容性已经验证。
+本轮已在一台 Android 真机验证覆盖升级、恢复阅读和离线正文；系统文件选择器及更多设备兼容性待后续覆盖。
 
 参考：[Tauri 前置依赖](https://v2.tauri.app/start/prerequisites/)、[系统 WebView](https://v2.tauri.app/reference/webview-versions/)、[CLI](https://v2.tauri.app/reference/cli/)。
 
@@ -76,7 +76,7 @@ npm run tauri -- android build --apk --target aarch64
 node scripts/verify-android-release.mjs
 ```
 
-结果位于 `src-tauri/gen/android/app/build/outputs/apk/`。最低 Android 8（API 26），CI 生成仅含 `arm64-v8a` 的 release APK；artifact 为 `android-arm64-release-apk`。下载解压后用系统文件管理器安装，或 `adb install -r <apk>`。release 模式关闭 `debuggable` 和明文 HTTP；完整真机验收及 0.3 覆盖升级仍待完成，未提交 Play Store。
+结果位于 `src-tauri/gen/android/app/build/outputs/apk/`。最低 Android 8（API 26），CI 生成仅含 `arm64-v8a` 的 release APK；artifact 为 `android-arm64-release-apk`。下载解压后用系统文件管理器安装，或 `adb install -r <apk>`。release 模式关闭 `debuggable` 和明文 HTTP；0.2 → 0.3 覆盖升级及本轮最小真机检查已通过，未提交 Play Store。
 
 签名 Secrets 尚未齐全时，main / 手动分支构建仍编译 release 模式，但只上传 `android-arm64-unsigned-candidate-apk`，仅用于确认编译及 app id、版本、ARM64、非调试标记。这是未签名候选物，不能作为可安装包或 Release 下载。tag 缺任一 Secret 必须失败；只有固定签名和证书验证通过的 tag 才能发布。Secrets 齐全后主线自动走签名流程，不生成临时密钥。
 
