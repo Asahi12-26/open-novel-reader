@@ -15,6 +15,7 @@ import './ui/ocean-shell.css';
 import { filterBooksForAccount, getCloudConfig, getSession, prepareLocalBookForAccount, prepareLocalProfileForAccount, startAutoSync, subscribeAuth, type AutoSyncState } from './services/cloud';
 import { readAuthCallback } from './services/auth-flow';
 import AuthCallback from './ui/AuthCallback';
+import { clearAIKey } from './services/ai';
 
 // Cached identity only scopes local views while offline. Cloud authorization
 // always validates the actual session with Supabase on the server.
@@ -94,6 +95,7 @@ export default function App() {
       const next = session ? getCloudConfig().url + '/' + session.user.id : undefined;
       const switched = principal.current !== next;
       if (switched) {
+        clearAIKey();
         openEpoch.current++; opening.current = false;
         setActive(null); setDetails(null); setTransitionBookId(null); setFrozenOrder(null); setFilter('all');
         if (principal.current) void run(() => db.settings.delete('readerSession'));
@@ -112,7 +114,7 @@ export default function App() {
     return () => { disposed = true; unsubscribe(); };
   }, [cloudRevision]);
   useEffect(() => {
-    const reconfigured = () => setCloudRevision(value => value + 1);
+    const reconfigured = () => { clearAIKey(); setCloudRevision(value => value + 1); };
     window.addEventListener('onr-cloud-config-changed', reconfigured);
     return () => window.removeEventListener('onr-cloud-config-changed', reconfigured);
   }, []);

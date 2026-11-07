@@ -12,7 +12,7 @@ export interface Bookshelf { id: string; name: string; updatedAt: number; delete
 export interface Character { id: string; bookId: string; name: string; aliases: string[] }
 export interface Dialogue { id: string; bookId: string; chapterId: string; paragraphIndex: number; start: number; end: number; text: string; characterId: string | null; confidence: number; source: 'ai' | 'manual'; model?: string; updatedAt: number }
 export interface CharacterCorrection { id: string; dialogueId: string; bookId: string; characterId: string | null; updatedAt: number }
-export interface AnalysisJob { id: string; bookId: string; chapterId: string; status: 'queued' | 'running' | 'paused' | 'done' | 'failed' | 'cancelled'; completedChunks: number; totalChunks: number; error?: string; updatedAt: number }
+export interface AnalysisJob { id: string; bookId: string; chapterId: string; status: 'queued' | 'running' | 'paused' | 'done' | 'failed' | 'cancelled'; completedChunks: number; totalChunks: number; error?: string; updatedAt: number; model?: string; reservedUsd?: number; estimatedMaxUsd?: number }
 export interface Preferences { theme: 'light' | 'dark' | 'sepia'; fontFamily: 'serif' | 'sans'; fontSize: number; lineHeight: number; readerWidth: number; showCharacters: boolean }
 export interface SyncState { id: string; updatedAt: number; lastSyncedAt?: number; error?: string }
 export const defaultPreferences: Preferences = { theme: 'light', fontFamily: 'serif', fontSize: 20, lineHeight: 1.95, readerWidth: 720, showCharacters: true };
