@@ -1,6 +1,6 @@
 # 云同步与真实 AI 部署
 
-本地阅读无需账号。云端和 AI 必须由部署者配置，界面不会伪装成已联网成功。首次发布未提供任何 API Key，也没有在开发时调用收费模型。
+本地阅读无需账号。V0.3.0-beta.1 沿用真实 Supabase 云同步，本人测试项目的 `deepseek-proxy` 已部署并通过登录鉴权与无上游状态检查。未预置任何 DeepSeek API Key，真实收费推理尚未执行、尚未验证；自建用户仍须配置自己的云项目。
 
 ## Supabase
 
@@ -29,7 +29,7 @@
 
 ## DeepSeek 代理
 
-Web 使用已登录的 Supabase Edge Function。客户端 API Key **仅在内存中**，不会写入 IndexedDB、localStorage、备份、同步字段或日志；重新启动需要重新输入。原生版本也采用相同的会话内存策略，当前未实现“记住密钥”的系统钥匙串功能。
+Web 使用已登录的 Supabase Edge Function。客户端 API Key **仅在内存中**，不会写入 IndexedDB、localStorage、备份、同步字段或日志；刷新、退出、切换账号或云项目后需要重新输入。原生版本采用相同策略，未实现“记住密钥”的系统钥匙串功能。账号 / 项目 / Key 变化会取消原任务，并在响应和写库边界拒绝旧任务继续保存。
 
 运行：
 
@@ -38,20 +38,22 @@ supabase secrets set ALLOWED_ORIGINS="https://asahi12-26.github.io,http://localh
 supabase functions deploy deepseek-proxy
 ```
 
-函数启用平台 JWT 验证，并额外使用 Supabase `getUser` 验证登录。允许来源为精确白名单；Windows/Android 当前使用 HTTPS WebView 源 `https://tauri.localhost`。上述命令包含目前公开 Web 站点的 origin；自行部署请替换为自己的站点 origin（无需路径）。不要设置通配来源。函数只允许固定 `https://api.deepseek.com/models` 与 `/chat/completions`，拒绝任意代理地址，在流式读取时限制请求体、限制输出 tokens、模型和单请求保守费用预算。
+函数启用平台 JWT 验证，并额外使用 Supabase `getUser` 验证非匿名登录用户。允许来源为精确白名单；Windows/Android 当前使用 HTTPS WebView 源 `https://tauri.localhost`。上述命令包含目前公开 Web 站点的 origin；自行部署请替换为自己的站点 origin（无需路径）。不要设置通配来源。函数只允许固定 `https://api.deepseek.com/models` 与 `/chat/completions`，拒绝任意代理地址；请求体最多 160,000 字节、上游响应最多 131,072 字节，另限制结构化输入、模型、固定系统提示、输出 tokens 和每请求 $0.10 保守估算额度。并发围栏为单个 warm isolate 的保护，不是跨设备账单硬限。
 
 密钥会随明确操作通过 TLS 发送到**你配置的 Supabase 服务端**，然后作为 Authorization 发送到 DeepSeek。函数只在本次调用内使用、不持久化也不打印。部署者仍须确保反向代理/观测系统不记录请求体；客户端内存策略不能阻止用户安装的不可信扩展或受感染终端读取内存。
 
-“测试连接”只查询 `/models`，不生成文本。点击“授权并分析”才会调用收费生成接口，发送所选章节对白及邻近上下文。不要在用户尚未授权时自动分析或重试；当前实现没有自动收费重试。暂停在当前片段完成后生效，取消会中止本地 fetch；上游已经处理的请求仍可能产生费用。
+「检查代理」发送经过登录认证的 `status` 请求，不发送 Key / 小说、不访问 DeepSeek；「测试连接」只查询 `/models`，不生成文本。选择章节后点击「授权并分析」才会调用收费生成接口，发送对白、邻近上下文及已有人物名称。不要在用户尚未授权时自动分析或重试；当前实现没有自动收费重试。暂停在当前片段完成后生效，取消会中止本地 fetch；上游已经处理的请求仍可能产生费用。
 
-截至 2026-11-02 官方可用模型为 `deepseek-flash` 与 `deepseek-v4-pro`。程序以峰时缓存未命中价格估计：每百万 input/output tokens 分别 $0.30/$1.20 与 $1.32/$3.96，另加 10% 裕量；使用 UTF-8 字节数保守估输入，输出每片段最多 4096 tokens。每次请求发送前先保留费用额度，即使网络超时也不自动退回预算。达到预算停止，不增加新的请求。服务商未来调价仍需更新两端价表，费用提示不是账单保证；使用者应同时在服务商账户限制充值/支出。报价依据：[DeepSeek 官方价格](https://api-docs.deepseek.com/quick_start/pricing/)。
+2026-11-06 已核对官方模型 `deepseek-flash` 与 `deepseek-v4-pro`。客户端和代理复用同一份模型 / 报价契约，以峰时缓存未命中价格估计：每百万 input/output tokens 分别 $0.30/$1.20 与 $1.32/$3.96，另加 10% 裕量；使用 UTF-8 字节数保守估输入，输出每片段最多 4096 tokens。每次请求发送前先原子保留费用额度，即使网络超时也不自动退回预算。达到任务累计预算停止，不增加新的请求。服务商未来调价仍需更新共享契约，费用提示不是账单保证；使用者应同时在服务商账户限制充值/支出。报价依据：[DeepSeek 官方价格](https://api-docs.deepseek.com/quick_start/pricing/)。
 
-对白由确定性扫描器创建段落索引和字符范围，模型只能回填已知候选 ID；无法确认或置信度低于 0.75 一律未知。跨章用书籍 ID+规范化名称生成稳定人物 ID；人工纠错单独保留且覆盖未来 AI 结果。可修改人物名称、别名合并和对白归属。当前分析范围为单章；长单条引文（>1800 字符）会跳过，避免不可控任务规模。任务检查点支持在应用内暂停/恢复，失败后需再次授权重试。
+对白由确定性扫描器创建段落索引和字符范围，模型只能回填已知候选 ID；无法确认、缺少上下文证据或置信度低于 0.75 一律未知。跨章用书籍 ID+规范化名称生成稳定人物 ID；人工纠错单独保留且覆盖未来 AI 结果。可修改人物名称、别名合并和对白归属。当前分析范围为单章；长单条引文（>1800 字符）会跳过，避免不可控任务规模。分片对白、人物和任务检查点原子保存，任务面板显示进度、错误与结果。
+
+应用内可暂停 / 恢复，失败、关闭或重启后的续跑需再次授权，只处理尚未完成的片段，保留此前失败请求的预留费用。重复分析同一章会被拒绝。恢复时核对模型、章节原文、分片及本机预算记录；云端 / 导入检查点缺少本机费用记录时不会直接续发收费请求，可新建任务，已有识别结果保留。
 
 ## 少量必要验证
 
-`npm test` 包含无需网络的对白定位、低置信度、授权边界、人工纠错与合并冲突测试。双设备客户端集成测试使用两个独立 Dexie 数据库运行真实的 `syncLibrary`、导入、原文校验与合并代码，仅替换云传输层，覆盖原文件往返、进度与元数据独立更新、在途修改、分类/偏好 CAS 冲突、删除/重新导入恢复、超限零上传及账号切换。这些测试不能代替真实 RLS 验证。`supabase test db` 运行 `supabase/tests/` 下 SQL 测试，验证两个账号之间书籍、偏好、文件隔离及书籍/配置过期写入拒绝。
+`npm test` 的 95 项单元 / 离线测试通过，包括模拟 AI 输出格式、对白定位与归属、人工纠错优先级、原子回滚、失败重试 / 恢复、预算、重复任务和账号变化。代理测试只使用模拟上游，不产生 DeepSeek 费用。双设备客户端集成测试使用两个独立 Dexie 数据库运行真实同步代码，仅替换云传输层；这些测试不能代替真实 RLS 验证。`supabase test db` 运行 `supabase/tests/` 下 SQL 隔离与过期写入测试。
 
-2026-11-04已在项目rqyhreuolusdwsqpfsxr执行26项真实SQL断言，并以两个临时账号、三个独立浏览器调用实际同步代码验证原文件、进度、书签、离线恢复和跨账号访问拒绝，所有测试数据清理后残留为0。这不等于SMTP邮件链路或Android/Windows真机同步已验证，后两项仍须在最终安装包上完成。真实收费模型测试需要使用者授权，不会为测试而自动发起。
+V0.2 已在项目 rqyhreuolusdwsqpfsxr 完成 26 项真实 SQL 断言及双临时账号 / 三浏览器同步隔离验证，测试数据残留为 0。V0.3 已部署真实代理，合法登录 JWT 的无上游状态检查成功，匿名 / 非法 JWT、外部来源、缺少授权和非法参数检查通过，临时账号已清理。Android 本人登录通过，原生同步、重启与离线检查进行中；真实 DeepSeek 收费测试需要使用者单独授权，不会为测试而自动发起。
 
 参考：[DeepSeek Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/)、[Supabase RLS](https://supabase.com/docs/guides/database/postgres/row-level-security)、[Storage 访问控制](https://supabase.com/docs/guides/storage/security/access-control)、[Edge Function 认证](https://supabase.com/docs/guides/functions/auth)。

@@ -16,6 +16,7 @@ import { filterBooksForAccount, getCloudConfig, getSession, prepareLocalBookForA
 import { readAuthCallback } from './services/auth-flow';
 import AuthCallback from './ui/AuthCallback';
 import { clearAIKey } from './services/ai';
+import { version as appVersion } from '../package.json';
 
 // Cached identity only scopes local views while offline. Cloud authorization
 // always validates the actual session with Supabase on the server.
@@ -193,7 +194,7 @@ export default function App() {
         <nav className="shelf-nav">{shelves.map(s => <button key={s.id} className={filter === s.id ? 'selected' : ''} onClick={() => setFilter(s.id)}><span className="shelf-dot"/>{s.name}<span>{books.filter(b => b.shelfId === s.id).length}</span></button>)}</nav>
         {newShelf && <form className="shelf-form" onSubmit={e => { e.preventDefault(); if (!shelfName.trim()) return; void run(async () => { await db.shelves.put({ id: crypto.randomUUID(), name: shelfName.trim(), updatedAt: Date.now() }); setShelfName(''); setNewShelf(false); }); }}><input aria-label="分类名称" value={shelfName} onChange={e => setShelfName(e.target.value)} placeholder="给新分类起个名字" maxLength={40} autoFocus/><button aria-label="保存分类"><Check size={16}/></button></form>}
         {!shelves.length && !newShelf && <p className="sidebar-hint">给喜欢的故事，<br/>一个专属的位置。</p>}
-        <div className="sidebar-bottom"><div className="local-status">{online ? <Check size={14}/> : <CloudOff size={14}/>} {online ? '本地优先 · 随时可读' : '已离线 · 阅读不受影响'}</div><button className="settings-nav" onClick={openAccountSettings}><SettingsIcon size={19}/>设置与云同步</button><div className="sidebar-foot">一个人，一本书，一整个世界。<small>FREE & OPEN SOURCE · BETA 0.1</small></div></div>
+        <div className="sidebar-bottom"><div className="local-status">{online ? <Check size={14}/> : <CloudOff size={14}/>} {online ? '本地优先 · 随时可读' : '已离线 · 阅读不受影响'}</div><button className="settings-nav" onClick={openAccountSettings}><SettingsIcon size={19}/>设置与云同步</button><div className="sidebar-foot">一个人，一本书，一整个世界。<small>FREE & OPEN SOURCE · {appVersion}</small></div></div>
       </aside>
       <main className="library-main">
         <header className="topbar"><span className="breadcrumb">我的文学馆 <span>/</span> {heading}</span><div className="topbar-actions"><span className="device-badge" title={syncStatus.error || undefined} aria-live="polite"><span/>{syncLabel}</span><button className="icon-button" aria-label="切换深浅主题" onClick={() => changePreferences({ theme: preferences.theme === 'dark' ? 'light' : 'dark' })}>{preferences.theme === 'dark' ? <Sun size={20}/> : <Moon size={20}/>}</button><button className="avatar" aria-label="账号与同步设置" onClick={openAccountSettings}>阅</button></div></header>

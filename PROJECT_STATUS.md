@@ -1,6 +1,18 @@
 # PROJECT_STATUS
 
-更新：2026-11-05 · V0.2 Beta 已发布
+更新：2026-11-07 · V0.3 Beta 候选
+
+## V0.3 本轮进展
+
+- 源码版本 `0.3.0-beta.1`，Android versionCode `3001`；沿用 app id、HTTPS WebView origin、固定发布签名和 Dexie v1 数据库，不重新初始化书库。
+- 复用对白定位、稳定人物 ID、人工纠错与任务检查点，补齐章节选择、进度、错误、结果摘要和正文纠正入口。未知人物保留为未知，人工纠错优先；分片结果与检查点在同一事务保存。
+- Key 仅保存在会话 RAM；刷新、退出、账号或云项目切换会清除 Key / 停止原任务，旧响应不能落入新账号视图。单章重复任务受锁保护，失败和取消保留已用额度，续跑必须重新明确授权，不自动重试收费请求。
+- 已在原有免费 Supabase 项目部署 `deepseek-proxy`，启用平台 JWT 验证和服务端 `getUser` 验证。精确来源白名单、固定上游 / 模型 / 系统提示、请求与响应大小、输出 token 和单请求估算费用边界已验证。
+- 真实登录 JWT 的 `status` 检查返回成功且不访问 DeepSeek；匿名、无效 JWT、外部来源、非法参数及未授权分析被拒绝。临时测试账号与数据已清理，不涉及私人小说。
+- **95 项单元 / 离线测试及 1 项新增 AI 生产浏览器流程通过**，覆盖输出格式、人物归属、请求中人工纠正、原子保存、暂停竞态、重复任务、账户切换、预算与检查点恢复。未调用真实收费 DeepSeek，真实供应商可用性与识别质量仍待验证。
+- Android 0.2 本人登录通过，原生同步、重启与断网阅读检查进行中，0.2 → 0.3 覆盖升级待最终包检查，不将登录成功等同于完成全部真机验收。
+- Supabase 的 Leaked Password Protection 官方文档标明仅 Pro 及以上套餐支持；保持免费套餐，不自动升级。它与正式 SMTP 一并列为开放公网注册前待办，邮箱确认仍开启。
+- 本轮目标为 [v0.3.0-beta.1](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.3.0-beta.1)；链接不表示安装包已生成，构建、附件与 Web 更新以实际发布结果为准。V0.2 交付历史如下。
 
 ## V0.2 本轮交付范围
 
@@ -19,7 +31,7 @@
 
 - 正式标签 `v0.2.0-beta.1` 指向提交 `85a74039ec7bfa742682b76d7a12c4332b4f11b0`；[标签原生构建与上传](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41992594440)和[标签 Web 检查](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41992594539)全部成功。[Beta 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.2.0-beta.1)四项附件均已从公开入口实际下载，文件名、GitHub 摘要和 SHA256SUMS 一致；APK 证书、清单和内置许可再次独立核验通过。
 
-剩余：Android APK 真机安装、原生账号互通与后续版本覆盖升级；正式 SMTP 留待开放公网注册前配置，不阻塞本人测试。V0.3 收费 DeepSeek 接入尚未开始。部署入口说明见 [CLOUD_SETUP.md](docs/CLOUD_SETUP.md)。
+V0.2 发布时剩余 Android 原生账号互通与后续版本覆盖升级，正式 SMTP 留待开放公网注册前配置，不阻塞本人测试。V0.3 进展与未验证部分见本页开头；部署入口见 [CLOUD_SETUP.md](docs/CLOUD_SETUP.md)。
 
 ## 真实云端验收（2026-11-04）
 
@@ -61,15 +73,15 @@
 
 ## 已知限制
 
-- Android 0.2 为 ARM64 固定发布签名包，最低 Android 8，尚未真机验证；旧 0.1 开发证书不同，须先在旧版导出书库再迁移。后续复用固定钥匙并递增 versionCode。Windows 未做发布者签名，无二进制自动更新器。
+- Android 为 ARM64 固定发布签名包，最低 Android 8；0.2 已完成本人登录，其余真机验收待继续。旧 0.1 开发证书不同，须先在旧版导出书库再迁移。0.3 沿用固定钥匙并将 versionCode 升至 3001，覆盖升级尚待实测。Windows 未做发布者签名，无二进制自动更新器。
 - EPUB 暂不呈现内嵌插图和出版商排版：[Issue #1](https://github.com/Asahi12-26/open-novel-reader/issues/1)。
 - 恢复备份上限 256 MiB，尚无大书库分卷导出，应保留小说原文件：[Issue #2](https://github.com/Asahi12-26/open-novel-reader/issues/2)。
 - 书库为设备级，共用设备请用独立浏览器配置或系统账号；Web / 原生书库分别存储。
-- 云端双账号隔离、本人确认邮件及电脑 / 手机网页同步续读已验证；正式 SMTP 与收费 AI 暂缓。AI Key 仅在会话内存，没有原生钥匙串持久化；iOS 仍需 macOS 与签名。
+- 云端双账号隔离、本人确认邮件及电脑 / 手机网页同步续读已验证；正式 SMTP 与 Pro 及以上套餐的泄露密码保护待开放注册前处理。代理鉴权与 AI 离线工作流已验证，真实收费推理尚未执行、未验证。AI Key 仅在会话内存，没有原生钥匙串持久化；iOS 仍需 macOS 与签名。
 - 备用 Sites 更新遇 Cloudflare Sandbox 平台请求故障；交付采用正常的 GitHub Pages 入口。
 
 ## 下一步
 
-1. Android 真机验证导入、阅读、重启、离线与升级；用已确认账号检查原生设备互通。固定发布签名及最终 ASCII 附件名校验已实现。
-2. 继续 EPUB 排版和大书库备份，不改变既有阅读锚点与数据。
-3. 正式开放注册前配置 SMTP；V0.3 再接入真实 DeepSeek，只有明确授权具体费用后才调用收费 AI。
+1. 继续 Android 重启、离线验证，最终 0.3 包再检查固定签名覆盖升级。
+2. 完成 V0.3 的平台构建与发布；真实 DeepSeek 单章收费验证仅在获得单独明确授权后执行。
+3. 正式开放注册前配置 SMTP，并处理 Leaked Password Protection 的套餐条件；不自动升级。EPUB 排版与大书库备份保留为后续工作。

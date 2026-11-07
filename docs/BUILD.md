@@ -1,6 +1,12 @@
 # 构建、安装与更新
 
-## 0.2 已验证产物（2026-11-05）
+## 0.3 本轮候选（2026-11-07）
+
+版本 `0.3.0-beta.1`，Android versionCode `3001`，沿用 0.2 的固定发布证书、应用标识和 HTTPS WebView origin；数据库仍为 Dexie v1，不清空或重建。95 项单元 / 离线测试通过。目标为 [V0.3 Beta 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.3.0-beta.1)，只有构建成功并实际附加的文件才是可用安装包，本节不表示附件已生成。
+
+真实 AI 代理已部署并完成不调用 DeepSeek 的登录鉴权检查；真实收费推理尚未执行、未验证。Android 0.2 本人登录通过，原生同步、重启与离线检查进行中；0.2 → 0.3 覆盖升级须用最终包另行确认。历史构建记录如下。
+
+## 历史 0.2 已验证产物（2026-11-05）
 
 [正式签名主线构建](https://github.com/Asahi12-26/open-novel-reader/actions/runs/41990522943)通过。Windows 0.1 → 0.2 在独立测试书库实际覆盖安装，第三章 41% 进度、书签及暖笺主题保留，账号页面已连接同一云项目。Android release APK 已通过 CI 与本地 Google apksig 双重验签，固定证书一致；版本 0.2.0-beta.1 / 2001、ARM64、非调试、禁止明文 HTTP。Android 真机验证仍待完成。
 
@@ -55,7 +61,7 @@ npm run tauri -- build --bundles nsis --ci
 
 开发产物下载：构建运行页 → `windows-x64-installer` → 解压并运行对应版本 EXE。Beta 发布页提供已改为 ASCII 文件名的直接安装包。Windows 0.1 → 0.2 已实际覆盖升级验证，但更换应用标识、数据源或卸载清理仍可能删除数据，升级前可导出备份。
 
-## Android：0.2 固定发布签名
+## Android：沿用 0.2 固定发布签名
 
 需要 Rust stable、JDK 17、Android SDK（当前生成模板的 compile / target SDK 为 37；build tools 36.0.0）、NDK 27.2.12479018；设置 `JAVA_HOME`、`ANDROID_HOME`、`NDK_HOME`。CI 使用锁定版本的 Tauri CLI 生成工程，由 Gradle补齐所需 SDK。手动构建时以生成的 Gradle 配置为准。不需要 Play Console 账号即可侧载 APK。
 
@@ -70,7 +76,7 @@ npm run tauri -- android build --apk --target aarch64
 node scripts/verify-android-release.mjs
 ```
 
-结果位于 `src-tauri/gen/android/app/build/outputs/apk/`。最低 Android 8（API 26），CI 生成仅含 `arm64-v8a` 的 release APK；artifact 为 `android-arm64-release-apk`。下载解压后用系统文件管理器安装，或 `adb install -r <apk>`。release 模式关闭 `debuggable` 和明文 HTTP；尚未完成真机验证，也未提交 Play Store。
+结果位于 `src-tauri/gen/android/app/build/outputs/apk/`。最低 Android 8（API 26），CI 生成仅含 `arm64-v8a` 的 release APK；artifact 为 `android-arm64-release-apk`。下载解压后用系统文件管理器安装，或 `adb install -r <apk>`。release 模式关闭 `debuggable` 和明文 HTTP；完整真机验收及 0.3 覆盖升级仍待完成，未提交 Play Store。
 
 签名 Secrets 尚未齐全时，main / 手动分支构建仍编译 release 模式，但只上传 `android-arm64-unsigned-candidate-apk`，仅用于确认编译及 app id、版本、ARM64、非调试标记。这是未签名候选物，不能作为可安装包或 Release 下载。tag 缺任一 Secret 必须失败；只有固定签名和证书验证通过的 tag 才能发布。Secrets 齐全后主线自动走签名流程，不生成临时密钥。
 
@@ -135,7 +141,7 @@ DPAPI credential 文件只能由本机当前用户解密，复制它不能替代
 - `Windows and Android builds`：main 和 `v*` tag 自动生成原生 artifacts；tag 成功后附加到 GitHub prerelease。
 - `Publish Web PWA`：GitHub Pages 生产部署；需要仓库启用 Pages。
 
-0.2 的版本为 `0.2.0-beta.1`，Android versionCode 为 `2001`（上一版 `1001`）。将 package.json / package-lock.json、src-tauri/Cargo.toml / Cargo.lock、tauri.conf.json 版本同步更新；之后每个 Android 发布的 versionCode 必须继续递增。`node scripts/check-release-version.mjs` 在原生 CI 检查版本、tag 和稳定 app id。推送 `v0.2.0-beta.1` 一类 tag 后查看 Actions；只有成功生成的 artifact 才算原生构建完成。工作流失败时修复后再发布，不把未生成的文件列为下载。
+本轮版本为 `0.3.0-beta.1`，Android versionCode 为 `3001`（0.2 为 `2001`，0.1 为 `1001`）。将 package.json / package-lock.json、src-tauri/Cargo.toml / Cargo.lock、tauri.conf.json 版本同步更新；之后每个 Android 发布的 versionCode 必须继续递增。`node scripts/check-release-version.mjs` 在原生 CI 检查版本、tag 和稳定 app id。推送 `v0.3.0-beta.1` 一类 tag 后查看 Actions；只有成功生成的 artifact 才算原生构建完成。工作流失败时修复后再发布，不把未生成的文件列为下载。
 
 tag 工作流将原生二进制复制成 `Open-Novel-Reader_<version>_windows-x64-setup.exe`、`Open-Novel-Reader_<version>_android-arm64.apk`，随同 `THIRD_PARTY_LICENSES.zip`、`SHA256SUMS.txt` 上传。先规范为无空格的 ASCII 下载名再生成校验值，上传后检查实际附件名称，避免 GitHub 重命名导致校验文件名不匹配。已存在的同 tag Release 只覆盖同名附件，不会因为 Release 已存在而失败。
 
