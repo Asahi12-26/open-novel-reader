@@ -1,8 +1,17 @@
 # 构建、安装与更新
 
-## 0.3 本轮候选（2026-11-07）
+## 0.3 已发布产物（2026-11-08）
 
-版本 `0.3.0-beta.1`，Android versionCode `3001`，沿用 0.2 的固定发布证书、应用标识和 HTTPS WebView origin；数据库仍为 Dexie v1，不清空或重建。主线候选 `41a8647` 的 95 项单元 / 离线测试、11 项浏览器流程及 Windows / Android CI 构建全部通过。Windows 隔离书库 0.2 → 0.3 覆盖安装返回 0，保留 1 本测试书、第三章 41%、1 个书签与暖笺主题。Android 真机覆盖升级保留原登录、书库和第三章 88%，书签、冷重启、完全断网正文、恢复联网同步和非收费代理检查均通过，网络已原样恢复。 目标为 [V0.3 Beta 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.3.0-beta.1)，候选包已构建验证，正式标签和附件尚未发布。
+版本 `0.3.0-beta.1`，Android versionCode `3001`，正式标签 `37455962d3cef1c888a860c725b09e53f76cd69e`。沿用 0.2 的固定发布证书、应用标识、HTTPS WebView origin 和 Dexie v1 数据库，不清空或重建。[标签原生构建](https://github.com/Asahi12-26/open-novel-reader/actions/runs/42361969367)、[标签 Web 检查](https://github.com/Asahi12-26/open-novel-reader/actions/runs/42361969469)及 [Pages 部署](https://github.com/Asahi12-26/open-novel-reader/actions/runs/42361941854)全部成功。
+
+[V0.3 Beta](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.3.0-beta.1)的 EXE、APK、许可包和 SHA256SUMS 四项附件已实际下载，GitHub 摘要与校验文件一致。APK 固定证书、versionCode 3001、ARM64、非调试、禁止明文 HTTP 和 7 项内置许可均通过。最终标签 APK 的真机安装复核仍在进行。
+
+| 正式附件 | 字节数 | SHA256 |
+| --- | ---: | --- |
+| [Windows EXE](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.3.0-beta.1/Open-Novel-Reader_0.3.0-beta.1_windows-x64-setup.exe) | 2018365 | `a2c749f3c86aa0ebd473acb44e1aca429dfa6530b075d7802bead09dedf9b0c4` |
+| [Android APK](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.3.0-beta.1/Open-Novel-Reader_0.3.0-beta.1_android-arm64.apk) | 7190041 | `3749a2b6319167fe0c850695626a928d1521672ce458051727155d7cc68aa6a8` |
+
+另见 [SHA256SUMS.txt](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.3.0-beta.1/SHA256SUMS.txt)与 [THIRD_PARTY_LICENSES.zip](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.3.0-beta.1/THIRD_PARTY_LICENSES.zip)。候选 `41a8647` 的 95 项单元 / 离线测试、11 项浏览器流程及原生 CI 构建已通过；Windows 隔离书库覆盖升级保留测试书、第三章 41%、书签和主题，Android 真机覆盖升级保留登录、书库和第三章 88%，书签、冷重启、完全断网正文、联网同步与非收费代理检查均通过。该候选真机记录与正式附件核验分别保留，不能混用二进制摘要。
 
 原创短章 Flash 真实推理最小验证通过：完成 1/1 分片，3 句对白全部归属到 2 名人物，0 未知，1 处人工确认重新打开后仍保存。测试结束已清除会话内存密钥；整本书与复杂人物的识别准确率仍待扩展验证，后续收费调用需另行授权。 历史构建记录如下。
 
@@ -76,7 +85,7 @@ npm run tauri -- android build --apk --target aarch64
 node scripts/verify-android-release.mjs
 ```
 
-结果位于 `src-tauri/gen/android/app/build/outputs/apk/`。最低 Android 8（API 26），CI 生成仅含 `arm64-v8a` 的 release APK；artifact 为 `android-arm64-release-apk`。下载解压后用系统文件管理器安装，或 `adb install -r <apk>`。release 模式关闭 `debuggable` 和明文 HTTP；0.2 → 0.3 覆盖升级及本轮最小真机检查已通过，未提交 Play Store。
+结果位于 `src-tauri/gen/android/app/build/outputs/apk/`。最低 Android 8（API 26），CI 生成仅含 `arm64-v8a` 的 release APK；artifact 为 `android-arm64-release-apk`。下载解压后用系统文件管理器安装，或 `adb install -r <apk>`。release 模式关闭 `debuggable` 和明文 HTTP；候选 0.2 → 0.3 覆盖升级及最小真机检查已通过，最终标签 APK 尚未追加真机安装复核（手机未连接），未提交 Play Store。
 
 签名 Secrets 尚未齐全时，main / 手动分支构建仍编译 release 模式，但只上传 `android-arm64-unsigned-candidate-apk`，仅用于确认编译及 app id、版本、ARM64、非调试标记。这是未签名候选物，不能作为可安装包或 Release 下载。tag 缺任一 Secret 必须失败；只有固定签名和证书验证通过的 tag 才能发布。Secrets 齐全后主线自动走签名流程，不生成临时密钥。
 

@@ -6,20 +6,20 @@
 
 ## 当前版本与下载
 
-**本轮候选版本：0.3.0-beta.1，Android versionCode 3001。** 保留动态书海、阅读器、本地数据库、云同步与固定 Android 签名，完善逐章 AI 识别。真实代理、Android 原生来源、原创短文 Flash 推理及人工确认保存已验证；候选安装包已构建并通过覆盖升级，正式标签与附件待发布。
+**0.3.0-beta.1 已发布，Android versionCode 3001。** 保留动态书海、阅读器、本地数据库、云同步与固定 Android 签名，完善逐章 AI 识别。真实代理、Android 原生来源、原创短文 Flash 推理及人工确认保存已验证；正式安装包、许可附件与校验文件已公开并下载核验。
 
 当前使用 Supabase 内置团队测试邮件，正式公网注册和完整密码找回暂不开放。已有测试账号可在三个平台登录；自建与配置步骤见 [云服务配置](docs/CLOUD_SETUP.md)。
 
 | 平台 | 本轮状态 | 使用入口 |
 | --- | --- | --- |
-| Web / PWA | 沿用公开入口，V0.3 部署后更新 | [在线使用](https://asahi12-26.github.io/open-novel-reader/) |
-| Windows x64 | 候选构建成功，0.2 → 0.3 隔离书库覆盖升级保留数据通过；待发布 | [V0.3 目标发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.3.0-beta.1) |
-| Android ARM64 | 固定签名覆盖升级、登录、同步、书签、重启及离线阅读通过；待发布 | [V0.3 目标发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.3.0-beta.1) |
+| Web / PWA | V0.3 已部署 | [在线使用](https://asahi12-26.github.io/open-novel-reader/) |
+| Windows x64 | 正式包安装、启动及续读通过；候选覆盖升级保留数据通过 | [下载 EXE](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.3.0-beta.1/Open-Novel-Reader_0.3.0-beta.1_windows-x64-setup.exe) |
+| Android ARM64 | 正式包固定签名、清单与摘要通过；候选真机检查通过，最终包待设备重连复核 | [下载 APK](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.3.0-beta.1/Open-Novel-Reader_0.3.0-beta.1_android-arm64.apk) |
 | iOS | 保留共享架构，尚无 IPA 构建 | 需要 macOS 和签名条件 |
 
-V0.3 链接是发布目标，安装包以发布页实际附件和 `SHA256SUMS.txt` 为准；候选包已构建验证，正式标签和附件尚未发布。已发布的 [V0.2 Beta](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.2.0-beta.1)保留供查阅。Windows 未做发布者签名。**旧 Android 0.1 开发签名与新发布证书不同，不能直接覆盖安装；先在旧版导出书库，再迁移。** 0.2 起后续版本复用同一发布钥匙并递增 versionCode；0.2 → 0.3 真机覆盖升级已通过。安装步骤见 [使用指南](docs/USAGE.md)。
+[V0.3 Beta 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.3.0-beta.1)的四项附件已下载核验，GitHub 摘要与 [SHA256SUMS.txt](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.3.0-beta.1/SHA256SUMS.txt)一致，许可包见 [THIRD_PARTY_LICENSES.zip](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.3.0-beta.1/THIRD_PARTY_LICENSES.zip)。正式标签为 `37455962d3cef1c888a860c725b09e53f76cd69e`。Windows 未做发布者签名。**旧 Android 0.1 开发签名与发布证书不同，不能直接覆盖安装；先在旧版导出书库，再迁移。** 0.2 起复用同一发布钥匙并递增 versionCode；候选 0.2 → 0.3 真机升级已通过，最终标签 APK 待设备重新连接后复核。安装步骤见 [使用指南](docs/USAGE.md)。
 
-主线候选 `41a8647` 的 95 项单元 / 离线测试、11 项浏览器流程及 Windows / Android CI 构建全部通过。Windows 隔离书库 0.2 → 0.3 覆盖安装返回 0，保留 1 本测试书、第三章 41%、1 个书签与暖笺主题。Android 真机覆盖升级保留原登录、书库和第三章 88%，书签、冷重启、完全断网正文、恢复联网同步和非收费代理检查均通过，网络已原样恢复。 验证范围见 [PROJECT_STATUS.md](PROJECT_STATUS.md)。
+主线候选 `41a8647` 的 95 项单元 / 离线测试、11 项浏览器流程及 Windows / Android CI 构建全部通过。Windows 隔离书库 0.2 → 0.3 覆盖安装返回 0，保留 1 本测试书、第三章 41%、1 个书签与暖笺主题。候选 Android APK 真机覆盖升级保留原登录、书库和第三章 88%，书签、冷重启、完全断网正文、恢复联网同步和非收费代理检查均通过，网络已原样恢复。 验证范围见 [PROJECT_STATUS.md](PROJECT_STATUS.md)。
 
 ## 现在可以用什么
 
@@ -61,7 +61,7 @@ DeepSeek Key **仅保存在本次会话内存**。Web / 原生统一经已配置
 
 ## 构建与发布
 
-参见 [平台构建](docs/BUILD.md)。CI 在 main 更新时执行检查和平台构建，打 `v*` tag 后上传预发布安装包；公开 PWA 由 GitHub Pages 部署。未设置自动二进制更新，当前从 Releases 手动获取新版，更新前先备份。0.2 原生签名构建与 Windows 升级已验证，V0.3 成品状态以本轮 Actions / Release 为准。
+参见 [平台构建](docs/BUILD.md)。V0.3 的标签原生构建、Web 检查与 Pages 部署全部成功，正式四项附件已校验。未设置自动二进制更新，当前从 [Releases](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.3.0-beta.1)手动获取新版，更新前先备份。
 
 ## 代码布局
 

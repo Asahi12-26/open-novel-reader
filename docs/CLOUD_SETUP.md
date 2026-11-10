@@ -1,6 +1,6 @@
 # V0.3 云服务与 AI 连接
 
-本地阅读始终可用。V0.2 真实 Supabase 云同步、26 项 SQL 隔离检查和双账号 / 三浏览器验证保留。V0.3 已部署 `deepseek-proxy`。主线候选 `41a8647` 的 95 项单元 / 离线测试、11 项浏览器流程及 Windows / Android CI 构建全部通过。Windows 隔离书库 0.2 → 0.3 覆盖安装返回 0，保留 1 本测试书、第三章 41%、1 个书签与暖笺主题。Android 真机覆盖升级保留原登录、书库和第三章 88%，书签、冷重启、完全断网正文、恢复联网同步和非收费代理检查均通过，网络已原样恢复。 原创短章 Flash 真实推理最小验证通过：完成 1/1 分片，3 句对白全部归属到 2 名人物，0 未知，1 处人工确认重新打开后仍保存。测试结束已清除会话内存密钥；整本书与复杂人物的识别准确率仍待扩展验证，后续收费调用需另行授权。 [V0.3 目标发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.3.0-beta.1)的正式标签和附件尚未发布，当前状态见 [项目状态](../PROJECT_STATUS.md)。
+本地阅读始终可用。[V0.3 Beta](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.3.0-beta.1)已发布，正式标签为 `37455962d3cef1c888a860c725b09e53f76cd69e`，Web 已部署，四项公开附件已下载校验。原有真实 Supabase 同步及隔离验证保留，`deepseek-proxy` 已部署。候选 `41a8647` 的 95 项离线测试、11 项浏览器流程和 Windows / Android 覆盖升级通过；最终标签 APK 尚未追加真机安装复核（手机未连接）。原创短章 Flash 的 3 句对白归属与人工确认保存已通过，测试后已清除会话密钥；整本书与复杂人物准确率仍待扩展验证，后续收费调用须另行授权。详情见 [项目状态](../PROJECT_STATUS.md)。
 
 ## 账号维护者需要操作的部分
 
@@ -25,6 +25,6 @@ Leaked Password Protection 的控制台告警已检查：[官方文档](https://
 
 在同一账号的独立设备上导入原创测试书，选择上传，再检查另一设备的原文件、分类、章节位置、书签、阅读设置；断网修改后恢复连接，确认合并与续读。在另一账号检查无法读取、修改或下载前一账号的书籍。SQL 的两个账号隔离测试需在真实项目执行，并回滚测试数据；不拿用户私人小说做测试。
 
-Windows / Android 候选包已实际构建，并完成 0.2 → 0.3 保留数据的覆盖升级。Android 0.1 旧开发签名与新的固定发布签名不同，不能直接覆盖；先在旧版导出书库，保留可恢复备份，再迁移到新版。0.3 沿用 0.2 的发布签名并将 versionCode 从 2001 升至 3001，不需要卸载或清除数据。正式标签附件发布后仍须核对下载摘要。
+Windows / Android 正式附件已从 [发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.3.0-beta.1)下载，GitHub 摘要与 SHA256SUMS 一致；候选 `41a8647` 已完成 0.2 → 0.3 保留数据的覆盖升级。Android 0.1 开发签名不同，不能直接覆盖；先在旧版导出书库并保留可恢复备份再迁移。0.3 沿用 0.2 发布签名，versionCode 从 2001 升至 3001，不需要卸载或清除数据；最终标签 APK 尚未追加真机安装复核（手机未连接）。
 
 参考：[Supabase 邮箱密码](https://supabase.com/docs/guides/auth/passwords)、[邮件服务限制](https://supabase.com/docs/guides/auth/auth-smtp)、[回调地址配置](https://supabase.com/docs/guides/auth/redirect-urls)。

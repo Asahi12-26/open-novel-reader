@@ -1,6 +1,6 @@
 # 云同步与真实 AI 部署
 
-本地阅读无需账号。V0.3.0-beta.1 沿用真实 Supabase 云同步，`deepseek-proxy` 已部署，Web / Android 登录鉴权与非收费状态检查通过。未预置任何 DeepSeek API Key。原创短章 Flash 真实推理最小验证通过：完成 1/1 分片，3 句对白全部归属到 2 名人物，0 未知，1 处人工确认重新打开后仍保存。测试结束已清除会话内存密钥；整本书与复杂人物的识别准确率仍待扩展验证，后续收费调用需另行授权。 自建用户仍须配置自己的云项目。
+本地阅读无需账号。[V0.3.0-beta.1](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.3.0-beta.1)已发布，Web 已部署，Windows / Android 正式包及两项配套附件已公开下载核验。沿用真实 Supabase 同步，`deepseek-proxy` 已部署，Web / Android 登录鉴权与非收费状态检查通过。未预置任何 DeepSeek API Key。原创短章 Flash 真实推理通过：1/1 分片、3 句对白归属到 2 名人物、0 未知，1 处人工确认重新打开后仍保存。测试后已清除会话密钥；复杂人物与整本书质量仍待扩展验证，后续收费调用须另行授权。自建用户仍须配置自己的云项目。
 
 ## Supabase
 
@@ -54,6 +54,6 @@ supabase functions deploy deepseek-proxy
 
 主线候选 `41a8647` 的 95 项单元 / 离线测试及 11 项浏览器流程通过，包括模拟 AI 输出格式、对白定位与归属、人工纠错优先级、原子回滚、失败重试 / 恢复、预算、重复任务和账号变化。代理测试只使用模拟上游，不产生 DeepSeek 费用。双设备客户端集成测试使用两个独立 Dexie 数据库运行真实同步代码，仅替换云传输层；这些测试不能代替真实 RLS 验证。`supabase test db` 运行 `supabase/tests/` 下 SQL 隔离与过期写入测试。
 
-V0.2 已在项目 rqyhreuolusdwsqpfsxr 完成 26 项真实 SQL 断言及双临时账号 / 三浏览器同步隔离验证，测试数据残留为 0。V0.3 已部署真实代理，合法登录 JWT 的无上游状态检查成功，匿名 / 非法 JWT、外部来源、缺少授权和非法参数检查通过，临时账号已清理。主线候选 `41a8647` 的 95 项单元 / 离线测试、11 项浏览器流程及 Windows / Android CI 构建全部通过。Windows 隔离书库 0.2 → 0.3 覆盖安装返回 0，保留 1 本测试书、第三章 41%、1 个书签与暖笺主题。Android 真机覆盖升级保留原登录、书库和第三章 88%，书签、冷重启、完全断网正文、恢复联网同步和非收费代理检查均通过，网络已原样恢复。 原创短章 Flash 真实推理最小验证通过：完成 1/1 分片，3 句对白全部归属到 2 名人物，0 未知，1 处人工确认重新打开后仍保存。测试结束已清除会话内存密钥；整本书与复杂人物的识别准确率仍待扩展验证，后续收费调用需另行授权。
+V0.2 已在项目 rqyhreuolusdwsqpfsxr 完成 26 项真实 SQL 断言及双临时账号 / 三浏览器同步隔离验证，测试数据残留为 0。V0.3 已部署真实代理，合法登录 JWT 的无上游状态检查成功，匿名 / 非法 JWT、外部来源、缺少授权和非法参数检查通过，临时账号已清理。主线候选 `41a8647` 的 95 项单元 / 离线测试、11 项浏览器流程及 Windows / Android CI 构建全部通过。Windows 隔离书库 0.2 → 0.3 覆盖安装返回 0，保留 1 本测试书、第三章 41%、1 个书签与暖笺主题。候选 Android APK 真机覆盖升级保留原登录、书库和第三章 88%，书签、冷重启、完全断网正文、恢复联网同步和非收费代理检查均通过，网络已原样恢复。 原创短章 Flash 真实推理最小验证通过：完成 1/1 分片，3 句对白全部归属到 2 名人物，0 未知，1 处人工确认重新打开后仍保存。测试结束已清除会话内存密钥；整本书与复杂人物的识别准确率仍待扩展验证，后续收费调用需另行授权。
 
 参考：[DeepSeek Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/)、[Supabase RLS](https://supabase.com/docs/guides/database/postgres/row-level-security)、[Storage 访问控制](https://supabase.com/docs/guides/storage/security/access-control)、[Edge Function 认证](https://supabase.com/docs/guides/functions/auth)。
