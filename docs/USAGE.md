@@ -4,7 +4,7 @@
 
 - **Web / PWA：** 打开 [公开阅读器](https://asahi12-26.github.io/open-novel-reader/)，无需注册即可导入小说。首次联网打开并完成应用缓存后可离线再开；浏览器支持时可用菜单中的安装应用功能。
 - **Windows x64：** [下载 V0.3 EXE](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.3.0-beta.1/Open-Novel-Reader_0.3.0-beta.1_windows-x64-setup.exe)，运行并按向导安装。0.1 → 0.2 与候选 `41a8647` 的 0.2 → 0.3 覆盖升级已验证，保留测试书、章节位置、书签和主题；正式附件版本及摘要已核验。安装程序未做发布者签名。
-- **Android ARM64：** [下载 V0.3 APK](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.3.0-beta.1/Open-Novel-Reader_0.3.0-beta.1_android-arm64.apk)，传到手机后安装。最低 Android 8，固定发布签名，versionCode 3001；正式包验签、清单和摘要通过。候选 `41a8647` 的 0.2 → 0.3 真机覆盖升级、登录、同步、书签、重启和离线正文均通过，最终标签 APK 尚未追加真机安装复核（手机未连接）。**旧 0.1 开发签名不能直接覆盖安装到 0.2 / 0.3，先在旧版导出书库并保留备份，再卸载迁移，勿直接卸载。** 0.2 起复用同一签名并递增版本号。
+- **Android ARM64：** [下载 V0.3 APK](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.3.0-beta.1/Open-Novel-Reader_0.3.0-beta.1_android-arm64.apk)，传到手机后安装。最低 Android 8，固定发布签名，versionCode 3001；正式包验签、清单和摘要通过。候选 `41a8647` 的 0.2 → 0.3 真机覆盖升级、登录、同步、书签、重启和离线正文均通过，正式标签 APK 已完成实机覆盖安装与冷重启复核，登录、第 3 章 88% 和原 1 个书签均保留，手动同步成功。**旧 0.1 开发签名不能直接覆盖安装到 0.2 / 0.3，先在旧版导出书库并保留备份，再卸载迁移，勿直接卸载。** 0.2 起复用同一签名并递增版本号。
 
 [V0.3 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.3.0-beta.1)四项附件已实际下载核验，摘要与 [SHA256SUMS.txt](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.3.0-beta.1/SHA256SUMS.txt)一致；[V0.2](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.2.0-beta.1)保留为历史版本。Web 已部署 V0.3；Web、Windows、Android 的本机书库分别保存，登录同一账号并明确允许上传后才会通过云端同步。
 

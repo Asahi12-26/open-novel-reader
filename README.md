@@ -14,10 +14,10 @@
 | --- | --- | --- |
 | Web / PWA | V0.3 已部署 | [在线使用](https://asahi12-26.github.io/open-novel-reader/) |
 | Windows x64 | 正式包安装、启动及续读通过；候选覆盖升级保留数据通过 | [下载 EXE](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.3.0-beta.1/Open-Novel-Reader_0.3.0-beta.1_windows-x64-setup.exe) |
-| Android ARM64 | 正式包固定签名、清单与摘要通过；候选真机检查通过，最终包待设备重连复核 | [下载 APK](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.3.0-beta.1/Open-Novel-Reader_0.3.0-beta.1_android-arm64.apk) |
+| Android ARM64 | 正式包固定签名、清单与摘要通过；候选真机检查通过，正式包实机安装及冷重启复核通过 | [下载 APK](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.3.0-beta.1/Open-Novel-Reader_0.3.0-beta.1_android-arm64.apk) |
 | iOS | 保留共享架构，尚无 IPA 构建 | 需要 macOS 和签名条件 |
 
-[V0.3 Beta 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.3.0-beta.1)的四项附件已下载核验，GitHub 摘要与 [SHA256SUMS.txt](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.3.0-beta.1/SHA256SUMS.txt)一致，许可包见 [THIRD_PARTY_LICENSES.zip](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.3.0-beta.1/THIRD_PARTY_LICENSES.zip)。正式标签为 `37455962d3cef1c888a860c725b09e53f76cd69e`。Windows 未做发布者签名。**旧 Android 0.1 开发签名与发布证书不同，不能直接覆盖安装；先在旧版导出书库，再迁移。** 0.2 起复用同一发布钥匙并递增 versionCode；候选 0.2 → 0.3 真机升级已通过，最终标签 APK 待设备重新连接后复核。安装步骤见 [使用指南](docs/USAGE.md)。
+[V0.3 Beta 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.3.0-beta.1)的四项附件已下载核验，GitHub 摘要与 [SHA256SUMS.txt](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.3.0-beta.1/SHA256SUMS.txt)一致，许可包见 [THIRD_PARTY_LICENSES.zip](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.3.0-beta.1/THIRD_PARTY_LICENSES.zip)。正式标签为 `37455962d3cef1c888a860c725b09e53f76cd69e`。Windows 未做发布者签名。**旧 Android 0.1 开发签名与发布证书不同，不能直接覆盖安装；先在旧版导出书库，再迁移。** 0.2 起复用同一发布钥匙并递增 versionCode；候选 0.2 → 0.3 真机升级已通过，正式标签 APK 的实机覆盖安装及冷重启复核也已通过。安装步骤见 [使用指南](docs/USAGE.md)。
 
 主线候选 `41a8647` 的 95 项单元 / 离线测试、11 项浏览器流程及 Windows / Android CI 构建全部通过。Windows 隔离书库 0.2 → 0.3 覆盖安装返回 0，保留 1 本测试书、第三章 41%、1 个书签与暖笺主题。候选 Android APK 真机覆盖升级保留原登录、书库和第三章 88%，书签、冷重启、完全断网正文、恢复联网同步和非收费代理检查均通过，网络已原样恢复。 验证范围见 [PROJECT_STATUS.md](PROJECT_STATUS.md)。
 

@@ -13,9 +13,11 @@
 - 原创短章 Flash 真实推理最小验证通过：完成 1/1 分片，3 句对白全部归属到 2 名人物，0 未知，1 处人工确认重新打开后仍保存。测试结束已清除会话内存密钥；整本书与复杂人物的识别准确率仍待扩展验证，后续收费调用需另行授权。
 - Android 顶部安全区修复已在真机确认，原来被状态栏遮挡的返回、目录与书签按钮现在可点击；没有卸载、清库或替换固定发布钥匙。
 - Supabase 的 Leaked Password Protection 官方文档标明仅 Pro 及以上套餐支持；保持免费套餐，不自动升级。它与正式 SMTP 一并列为开放公网注册前待办，邮箱确认仍开启。
-- [v0.3.0-beta.1](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.3.0-beta.1)已发布，标签提交 `37455962d3cef1c888a860c725b09e53f76cd69e`。[标签原生构建](https://github.com/Asahi12-26/open-novel-reader/actions/runs/42361969367)、[标签 Web 检查](https://github.com/Asahi12-26/open-novel-reader/actions/runs/42361969469)及 [Pages 部署](https://github.com/Asahi12-26/open-novel-reader/actions/runs/42361941854)全部成功。四项公开附件已实际下载，文件名、GitHub 摘要与 SHA256SUMS 一致；APK 固定证书、3001、ARM64、非调试、禁止明文 HTTP 和 7 项内置许可检查通过。最终标签 APK 尚未追加真机安装复核（手机未连接）；上述完整真机 QA 属于候选 `41a8647`。V0.2 交付历史如下。
+- [v0.3.0-beta.1](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.3.0-beta.1)已发布，标签提交 `37455962d3cef1c888a860c725b09e53f76cd69e`。[标签原生构建](https://github.com/Asahi12-26/open-novel-reader/actions/runs/42361969367)、[标签 Web 检查](https://github.com/Asahi12-26/open-novel-reader/actions/runs/42361969469)及 [Pages 部署](https://github.com/Asahi12-26/open-novel-reader/actions/runs/42361941854)全部成功。四项公开附件已实际下载，文件名、GitHub 摘要与 SHA256SUMS 一致；APK 固定证书、3001、ARM64、非调试、禁止明文 HTTP 和 7 项内置许可检查通过。正式标签 APK 已完成实机覆盖安装与冷重启复核，登录、第 3 章 88% 和原 1 个书签均保留，手动同步成功；上述完整真机 QA 属于候选 `41a8647`。V0.2 交付历史如下。
 
 - 正式标签 Windows EXE 已在隔离测试目录实际安装并启动，恢复原测试书第三章 41% 与暖笺主题；没有访问真实用户书库。
+
+- 正式标签 APK 已在同一手机用 install-r 覆盖安装，设备内 base.apk 的 SHA256 与发布附件一致；冷重启后登录、第三章 88%、正文与原书签均保留，手动同步成功。本次未改网络、未卸载清库、未调用模型。
 
 ## V0.2 本轮交付范围
 
@@ -76,7 +78,7 @@ V0.2 发布时剩余 Android 原生账号互通与后续版本覆盖升级，正
 
 ## 已知限制
 
-- Android 为 ARM64 固定发布签名包，最低 Android 8；候选 `41a8647` 的 0.2 → 0.3 真机覆盖升级、登录保持、同步、书签、重启与离线阅读均通过，最终标签 APK 尚未追加真机安装复核（手机未连接）。旧 0.1 开发证书不同，须先在旧版导出书库再迁移。0.3 versionCode 为 3001。Windows 未做发布者签名，无二进制自动更新器。
+- Android 为 ARM64 固定发布签名包，最低 Android 8；候选 `41a8647` 的 0.2 → 0.3 真机覆盖升级、登录保持、同步、书签、重启与离线阅读均通过，正式标签 APK 已完成实机覆盖安装与冷重启复核，登录、第 3 章 88% 和原 1 个书签均保留，手动同步成功。旧 0.1 开发证书不同，须先在旧版导出书库再迁移。0.3 versionCode 为 3001。Windows 未做发布者签名，无二进制自动更新器。
 - EPUB 暂不呈现内嵌插图和出版商排版：[Issue #1](https://github.com/Asahi12-26/open-novel-reader/issues/1)。
 - 恢复备份上限 256 MiB，尚无大书库分卷导出，应保留小说原文件：[Issue #2](https://github.com/Asahi12-26/open-novel-reader/issues/2)。
 - 书库为设备级，共用设备请用独立浏览器配置或系统账号；Web / 原生书库分别存储。
@@ -85,6 +87,5 @@ V0.2 发布时剩余 Android 原生账号互通与后续版本覆盖升级，正
 
 ## 下一步
 
-1. 完成最终标签 APK 的真机安装复核；已发布附件摘要与签名已核验。
-2. 扩展复杂人物与整本书准确率验证；任何后续生成须另获明确授权，不自动追加收费请求。
-3. 正式开放注册前配置 SMTP，并处理 Leaked Password Protection 的套餐条件；不自动升级。EPUB 排版与大书库备份保留为后续工作。
+1. 扩展复杂人物与整本书准确率验证；任何后续生成须另获明确授权，不自动追加收费请求。
+2. 正式开放注册前配置 SMTP，并处理 Leaked Password Protection 的套餐条件；不自动升级。EPUB 排版与大书库备份保留为后续工作。
