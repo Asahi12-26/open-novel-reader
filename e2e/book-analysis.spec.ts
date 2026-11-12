@@ -73,6 +73,8 @@ test('whole-book consent advances chapters, restores checkpoints, protects manua
   await expect(panel.getByRole('combobox', { name: '整书分析范围', exact: true })).toHaveValue('reading-progress');
   await panel.getByRole('combobox', { name: '整书分析范围', exact: true }).selectOption('deep');
   await expect(panel.getByRole('button', { name: '授权并开始整书分析', exact: true })).toBeDisabled();
+  await expect(panel.getByText('全书范围', { exact: true })).toBeVisible();
+  await expect(panel.getByRole('combobox', { name: '整书分析范围', exact: true })).toHaveValue('deep');
   expect(requests).toHaveLength(0);
   await panel.getByRole('checkbox', { name: '授权整书任务', exact: true }).check();
   await panel.getByRole('button', { name: '授权并开始整书分析', exact: true }).click();

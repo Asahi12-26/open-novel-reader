@@ -38,6 +38,7 @@ export default function BookAnalysisPanel({ bookId, chapters, dialogues, getChar
   const controller = useRef<BookAnalysisController | null>(null);
   const mounted = useRef(true);
   const initialized = useRef(false);
+  const formEdited = useRef(false);
   const records = useQuery(async () => ({ loaded: true, jobs: await listBookAnalysisJobs(bookId) }), [bookId], { loaded: false, jobs: [] as BookAnalysisJob[] });
   const jobs = useMemo(() => records.jobs.filter(item => item.bookId === bookId).sort((a, b) => b.updatedAt - a.updatedAt), [records.jobs, bookId]);
   const saved = jobs.find(item => item.id === selectedId);
@@ -65,7 +66,7 @@ export default function BookAnalysisPanel({ bookId, chapters, dialogues, getChar
   useEffect(() => {
     if (initialized.current || !records.loaded) return;
     initialized.current = true;
-    selectJob(jobs[0]);
+    if (jobs[0] && !formEdited.current && !controller.current) selectJob(jobs[0]);
   }, [records.loaded, jobs[0]?.id]);
   useEffect(() => {
     mounted.current = true;
@@ -88,6 +89,7 @@ export default function BookAnalysisPanel({ bookId, chapters, dialogues, getChar
 
   async function start(resume: boolean) {
     if (controller.current || !authorized || !keyReady || !validBudget) return;
+    formEdited.current = true;
     setAuthorized(false); setWorking(true); setPauseRequested(false); setError('');
     try {
       const task = analyzeBook({ bookId, mode, model, budgetUsd: budgetValue, authorized: true, jobId: resume ? job?.id : undefined,
@@ -110,6 +112,11 @@ export default function BookAnalysisPanel({ bookId, chapters, dialogues, getChar
     if (controller.current) { controller.current.cancel(); notify('整书分析会话已停止，已完成结果、进度与费用预留均保留。'); }
     onClose();
   };
+  const updateForm = (update: () => void) => {
+    formEdited.current = true;
+    update();
+    setAuthorized(false);
+  };
   const viewDialogue = (item: Dialogue) => {
     const chapter = chaptersById.get(item.chapterId);
     if (chapter) { setMinimized(true); onViewResults(chapter, item.paragraphIndex); }
@@ -126,9 +133,9 @@ export default function BookAnalysisPanel({ bookId, chapters, dialogues, getChar
     <div className="ai-intro"><span><Sparkles size={25}/></span><div><h3>让整本书里的人物连起来</h3><p>按章节分批识别，统一人物、别名与证据，保留人工纠正。</p></div></div>
     <p className="muted">一次授权可在固定总预算内自动推进。本地预处理与查看结果不收费；不会把整本书一次发送给模型。</p>
     {jobs.length > 0 && <label className="form-label">本机任务记录<select aria-label="本机任务记录" value={selectedId} disabled={working} onChange={event => selectJob(jobs.find(item => item.id === event.target.value))}><option value="">新建整书任务</option>{jobs.map(item => <option key={item.id} value={item.id}>{item.mode === 'deep' ? '整本书' : '阅读进度'} · {statusText[item.status]} · {new Date(item.createdAt).toLocaleString()}</option>)}</select></label>}
-    <label className="form-label">分析范围<select aria-label="整书分析范围" value={mode} disabled={locked} onChange={event => { setMode(event.target.value as BookAnalysisMode); setAuthorized(false); }}><option value="reading-progress">阅读进度模式</option><option value="deep">整本书深度模式</option></select></label>
+    <label className="form-label">分析范围<select aria-label="整书分析范围" value={mode} disabled={locked} onChange={event => updateForm(() => setMode(event.target.value as BookAnalysisMode))}><option value="reading-progress">阅读进度模式</option><option value="deep">整本书深度模式</option></select></label>
     <p className="fine-print">{mode === 'reading-progress' ? '仅发送已读到的完整对白。本次活动会话可随阅读推进继续分析；可返回阅读，未读正文不会提前发送。关闭会话或重启应用后，必须重新载入密钥并授权。' : '明确选择后可分析全书。阅读界面默认按当前阅读位置隐藏未来人物名称、别名和身份揭示，不展示剧情摘要。'}</p>
-    <label className="form-label">模型<select aria-label="整书分析模型" value={model} disabled={locked} onChange={event => { setModel(event.target.value as AIModel); setAuthorized(false); }}>{AI_MODELS.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+    <label className="form-label">模型<select aria-label="整书分析模型" value={model} disabled={locked} onChange={event => updateForm(() => setModel(event.target.value as AIModel))}>{AI_MODELS.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
     {estimating && <p className="muted" role="status"><LoaderCircle className="spin" size={16}/>正在本机预处理与估算…</p>}
     {!locked && estimateError && <p className="inline-error" role="alert">{estimateError}</p>}
     {!locked && estimate && <div className="estimate-box" aria-label="整书费用估算">
@@ -138,12 +145,12 @@ export default function BookAnalysisPanel({ bookId, chapters, dialogues, getChar
       <div><span>费用估算范围</span><strong>${estimate.estimatedMinUsd.toFixed(4)}–${estimate.estimatedMaxUsd.toFixed(4)}</strong></div>
       <small>这是按公开价格和输出上限计算的预留范围，不是供应商账单硬上限。失败、取消或超时可能计费；重试不退回已预留费用。{mode === 'reading-progress' && ' 随阅读追加的内容仍受同一总预算限制。'}</small>
     </div>}
-    <label className="form-label">整书任务累计总预算（美元）<input aria-label="整书任务累计总预算（美元）" type="number" min="0.001" max={MAX_BOOK_ANALYSIS_BUDGET_USD} step="0.001" value={budget} disabled={locked} onChange={event => { setBudget(event.target.value); setAuthorized(false); }}/></label>
+    <label className="form-label">整书任务累计总预算（美元）<input aria-label="整书任务累计总预算（美元）" type="number" min="0.001" max={MAX_BOOK_ANALYSIS_BUDGET_USD} step="0.001" value={budget} disabled={locked} onChange={event => updateForm(() => setBudget(event.target.value))}/></label>
     {!locked && validBudget && estimate && budgetValue < estimate.estimatedMaxUsd && <p className="inline-warning">总预算低于估算上界。任务只在总预算内推进，可能提前停止并保留已完成结果。</p>}
     {!locked && mode === 'deep' && estimate?.dialogueCount === 0 && <p className="fine-print">当前版本未在这本书里定位到可分析的对白。</p>}
     {job && <p className="fine-print">原任务的模式、模型和总预算已固定。继续会保留全部费用预留；需要不同设置时，请明确新建任务。</p>}
     {!keyReady && <p className="inline-warning">需在「设置 → AI 模型」重新载入本次会话密钥。已保存结果和进度仍可查看，不会自动发起请求。</p>}
-    <label className="checkbox-row authorization"><input aria-label="授权整书任务" type="checkbox" checked={authorized} disabled={working} onChange={event => setAuthorized(event.target.checked)}/>我明确同意发送上述范围内的对白、必要上下文及人物证据，授权本次整书会话在固定累计预算内自动推进与必要复核。{mode === 'reading-progress' && '本次活动会话可随我的阅读进度继续。'}失败后的收费重试须由我再次授权。</label>
+    <label className="checkbox-row authorization"><input aria-label="授权整书任务" type="checkbox" checked={authorized} disabled={working} onChange={event => { formEdited.current = true; setAuthorized(event.target.checked); }}/>我明确同意发送上述范围内的对白、必要上下文及人物证据，授权本次整书会话在固定累计预算内自动推进与必要复核。{mode === 'reading-progress' && '本次活动会话可随我的阅读进度继续。'}失败后的收费重试须由我再次授权。</label>
     {error && <p className="inline-error" role="alert">{error}</p>}
     {job && <section className="job-status" aria-label="整书任务进度" aria-live="polite">
       <div><strong>{displayStatus}</strong><span>{stageText[job.stage]}</span></div>
