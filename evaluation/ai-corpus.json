@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "description": "Small, human-labelled regression corpus. These labels are not model predictions.",
+  "sources": [
+    { "id": "original", "title": "Open Novel Reader original regression scenes", "rights": "Original test text, AGPL-3.0-only" },
+    { "id": "kong", "title": "孔乙己", "author": "魯迅", "published": 1919, "url": "https://zh.wikisource.org/wiki/%E5%AD%94%E4%B9%99%E5%B7%B1", "rights": "Underlying original is public domain in China and USA; source marks author died 1936. Short excerpts preserve source punctuation; surrounding scene labels are original." },
+    { "id": "alice", "title": "Alice's Adventures in Wonderland", "author": "Lewis Carroll", "published": 1865, "url": "https://www.gutenberg.org/cache/epub/11/pg11.txt", "rights": "Underlying original public domain; Project Gutenberg catalog ebook 11 marks public domain in USA. Short chapter V excerpts, paragraph line-wraps joined; no illustrations or modern translation." }
+  ],
+  "cases": [
+    { "id": "zh-explicit", "language": "zh", "scene": "explicit-speaker", "source": "original", "chapters": [
+      { "paragraphs": ["林青说：“我们明天出发。”", "沈河回答：“我带上地图。”"], "gold": [
+        { "paragraph": 0, "quote": "“我们明天出发。”", "speaker": "林青", "entity": "lan" },
+        { "paragraph": 1, "quote": "“我带上地图。”", "speaker": "沈河", "entity": "shen" }
+      ] }
+    ] },
+    { "id": "zh-ambiguous", "language": "zh", "scene": "ambiguous-pronoun", "source": "original", "chapters": [
+      { "paragraphs": ["林青与沈河一起走进雾里。有人说：“等等。”", "没有人看清说话者。另一个声音说：“是谁？”"], "gold": [
+        { "paragraph": 0, "quote": "“等等。”", "speaker": null, "entity": null },
+        { "paragraph": 1, "quote": "“是谁？”", "speaker": null, "entity": null }
+      ] }
+    ] },
+    { "id": "zh-reveal", "language": "zh", "scene": "identity-reveal", "source": "original", "chapters": [
+      { "paragraphs": ["蒙面客说：“我会回来。”"], "gold": [{ "paragraph": 0, "quote": "“我会回来。”", "speaker": "蒙面客", "entity": "lan" }] },
+      { "paragraphs": ["蒙面客摘下面具，沈河认出蒙面客就是林青。林青说：“是我。”"], "gold": [{ "paragraph": 0, "quote": "“是我。”", "speaker": "林青", "entity": "lan" }] }
+    ] },
+    { "id": "zh-homonym", "language": "zh", "scene": "same-name-different-people", "source": "original", "chapters": [
+      { "paragraphs": ["城里的医生王平说：“病人已经醒了。”"], "gold": [{ "paragraph": 0, "quote": "“病人已经醒了。”", "speaker": "王平", "entity": "doctor-wang" }] },
+      { "paragraphs": ["村里的教师也叫王平，他从未行医。教师王平说：“今天上算术课。”"], "gold": [{ "paragraph": 0, "quote": "“今天上算术课。”", "speaker": "王平", "entity": "teacher-wang" }] }
+    ] },
+    { "id": "en-apostrophes", "language": "en", "scene": "contractions-and-quotes", "source": "original", "chapters": [
+      { "paragraphs": ["Mary can't find John's map. Mary said, \"Don't leave yet.\"", "John replied, 'I'll wait here.'"], "gold": [
+        { "paragraph": 0, "quote": "\"Don't leave yet.\"", "speaker": "Mary", "entity": "mary" },
+        { "paragraph": 1, "quote": "'I'll wait here.'", "speaker": "John", "entity": "john" }
+      ] }
+    ] },
+    { "id": "en-reveal", "language": "en", "scene": "identity-reveal", "source": "original", "chapters": [
+      { "paragraphs": ["The traveler said, \"Meet me at dawn.\""], "gold": [{ "paragraph": 0, "quote": "\"Meet me at dawn.\"", "speaker": "traveler", "entity": "mira" }] },
+      { "paragraphs": ["The traveler removed her hood. The traveler was Mira. Mira said, \"You know my name now.\""], "gold": [{ "paragraph": 0, "quote": "\"You know my name now.\"", "speaker": "Mira", "entity": "mira" }] }
+    ] },
+    { "id": "manual-priority", "language": "zh", "scene": "manual-correction", "source": "original", "chapters": [
+      { "paragraphs": ["沈河接过伞说：“谢谢。”"], "gold": [{ "paragraph": 0, "quote": "“谢谢。”", "speaker": "沈河", "entity": "shen", "manual": true }] }
+    ] },
+    { "id": "kong-excerpt", "language": "zh", "scene": "public-domain-crowd-and-citation", "source": "kong", "chapters": [
+      { "paragraphs": [
+        "因爲他姓孔，別人便從描紅紙上的『上大人孔乙己』這半懂不懂的話裏，替他取下一個綽號，叫作孔乙己。",
+        "孔乙己一到店，所有喝酒的人便都看着他笑，有的叫道：『孔乙己，你臉上又添上新傷疤了！』他不回答，對櫃裏說：『温兩碗酒，要一碟茴香豆。』便排出九文大錢。",
+        "孔乙己睜大眼睛說：『你怎麽這樣憑空汚人淸白……』",
+        "孔乙己着了慌，伸開五指將碟子罩住，彎腰下去說道：『不多了，我已經不多了。』"
+      ], "gold": [
+        { "paragraph": 1, "quote": "『孔乙己，你臉上又添上新傷疤了！』", "speaker": null, "entity": null },
+        { "paragraph": 1, "quote": "『温兩碗酒，要一碟茴香豆。』", "speaker": "孔乙己", "entity": "kong" },
+        { "paragraph": 2, "quote": "『你怎麽這樣憑空汚人淸白……』", "speaker": "孔乙己", "entity": "kong" },
+        { "paragraph": 3, "quote": "『不多了，我已經不多了。』", "speaker": "孔乙己", "entity": "kong" }
+      ], "knownNonDialogueQuotes": ["『上大人孔乙己』"] }
+    ] },
+    { "id": "alice-v", "language": "en", "scene": "public-domain-interrupted-turns", "source": "alice", "chapters": [
+      { "paragraphs": [
+        "“Who are _you?_” said the Caterpillar.",
+        "This was not an encouraging opening for a conversation. Alice replied, rather shyly, “I—I hardly know, sir, just at present—at least I know who I _was_ when I got up this morning, but I think I must have been changed several times since then.”",
+        "“What do you mean by that?” said the Caterpillar sternly. “Explain yourself!”",
+        "“I can’t explain _myself_, I’m afraid, sir,” said Alice, “because I’m not myself, you see.”",
+        "“I don’t see,” said the Caterpillar."
+      ], "gold": [
+        { "paragraph": 0, "quote": "“Who are _you?_”", "speaker": "Caterpillar", "entity": "caterpillar" },
+        { "paragraph": 1, "quote": "“I—I hardly know, sir, just at present—at least I know who I _was_ when I got up this morning, but I think I must have been changed several times since then.”", "speaker": "Alice", "entity": "alice" },
+        { "paragraph": 2, "quote": "“What do you mean by that?”", "speaker": "Caterpillar", "entity": "caterpillar" },
+        { "paragraph": 2, "quote": "“Explain yourself!”", "speaker": "Caterpillar", "entity": "caterpillar" },
+        { "paragraph": 3, "quote": "“I can’t explain _myself_, I’m afraid, sir,”", "speaker": "Alice", "entity": "alice" },
+        { "paragraph": 3, "quote": "“because I’m not myself, you see.”", "speaker": "Alice", "entity": "alice" },
+        { "paragraph": 4, "quote": "“I don’t see,”", "speaker": "Caterpillar", "entity": "caterpillar" }
+      ] }
+    ] }
+  ]
+}

@@ -1,7 +1,7 @@
 {
   "name": "open-novel-reader",
   "private": true,
-  "version": "0.3.0-beta.1",
+  "version": "0.4.0-beta.1",
   "type": "module",
   "license": "AGPL-3.0-only",
   "scripts": {
@@ -11,7 +11,8 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "tauri": "tauri",
-    "licenses": "node scripts/licenses.mjs"
+    "licenses": "node scripts/licenses.mjs",
+    "quality:ai": "node scripts/evaluate-ai-quality.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.95.0",

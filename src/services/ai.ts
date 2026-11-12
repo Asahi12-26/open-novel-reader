@@ -1,7 +1,9 @@
 import { db } from '../core/db';
 import { getCloudConfig, getSession, subscribeAuth } from './cloud';
-import type { AnalysisJob, Chapter, Character, Dialogue } from '../types';
-import { AI_MODELS, AI_SYSTEM_PROMPT as SYSTEM_PROMPT, AI_OUTPUT_LIMIT as OUTPUT_LIMIT, AI_COST_MARGIN, AI_TOKEN_OVERHEAD, MAX_AI_REQUEST_COST_USD } from '../../supabase/functions/_shared/ai-contract';
+import type { AnalysisJob, Chapter, Character, Dialogue, IdentityLocation } from '../types';
+import { AI_MODELS, AI_SYSTEM_PROMPT as SYSTEM_PROMPT, AI_BOOK_SYSTEM_PROMPT, AI_OUTPUT_LIMIT as OUTPUT_LIMIT, AI_COST_MARGIN, AI_TOKEN_OVERHEAD, MAX_AI_REQUEST_COST_USD } from '../../supabase/functions/_shared/ai-contract';
+import { applyIdentityProposal, indexCharacterIntroductions, initializeCharacterIdentity, manualMergeCharacters, manualRenameCharacter } from './character-identity';
+import type { IdentityProposal } from './character-identity';
 
 export { AI_MODELS };
 export type AIModel = typeof AI_MODELS[number]['id'];
@@ -15,10 +17,23 @@ export interface AnalysisController { pause(): void; resume(): void; cancel(): v
 const encoder = new TextEncoder();
 const KNOWN_BYTES = 8000;
 const CONTEXT_BYTES = 24000;
-class AIError extends Error {}
+export class AIError extends Error {}
 let apiKey = '';
 let keyEpoch = 0;
 const active = new Map<string, AnalysisController>();
+const bookActive = new Map<string, { cancel(): void }>();
+export function registerBookAnalysis(bookId: string, controller: { cancel(): void }): () => void {
+  if (bookActive.has(bookId) || [...active.keys()].some(slot => JSON.parse(slot)[0] === bookId)) throw new AIError('这本书已有分析任务，请先结束原任务。');
+  bookActive.set(bookId, controller);
+  return () => { if (bookActive.get(bookId) === controller) bookActive.delete(bookId); };
+}
+export async function withAnalysisBookLock<T>(bookId: string, run: () => Promise<T>): Promise<T> {
+  if (typeof navigator !== 'undefined' && navigator.locks?.request) return navigator.locks.request(`onr-ai-book:${bookId}`, { ifAvailable: true }, lock => {
+    if (!lock) throw new AIError('另一个窗口正在分析这本书，请先结束原任务。');
+    return run();
+  });
+  return run();
+}
 /** Deliberately RAM-only on every platform. Reload/sign out should clear this; never backed up. */
 export function setAIKey(key: string) {
   const clean = key.trim();
@@ -30,6 +45,7 @@ export function hasAIKey() { return apiKey.length > 0; }
 export function clearAIKey() {
   apiKey = ''; keyEpoch++;
   for (const controller of active.values()) controller.cancel();
+  for (const controller of bookActive.values()) controller.cancel();
   if (typeof window !== 'undefined') window.dispatchEvent(new Event('onr-ai-key-changed'));
 }
 function modelInfo(model: AIModel) {
@@ -40,18 +56,27 @@ function modelInfo(model: AIModel) {
 export function extractDialogues(chapter: Chapter): DialogueCandidate[] {
   const candidates: DialogueCandidate[] = [];
   chapter.paragraphs.forEach((paragraph, paragraphIndex) => {
-    const pattern = /“[^”\n]+”|「[^」\n]+」|『[^』\n]+』|"[^"\n]+"|'[^'\n]+'/gu;
-    for (const match of paragraph.matchAll(pattern)) {
-      const start = match.index!; const end = start + match[0].length;
-      // Don't interpret apostrophes inside English words as quote boundaries.
-      if (match[0][0] === "'" && (/[\p{L}\p{N}]/u.test(paragraph[start - 1] || '') || /[\p{L}\p{N}]/u.test(paragraph[end] || ''))) continue;
-      if (match[0].length > 1800) continue; // Long quotations are handled as prose in this bounded beta task.
-      candidates.push({ id: `${chapter.id}:${paragraphIndex}:${start}:${end}`, paragraphIndex, start, end, text: match[0] });
+    const pairs: Record<string, string> = { '“': '”', '「': '」', '『': '』', '"': '"', "'": "'", '‘': '’' };
+    const word = (value: string) => /[\p{L}\p{N}]/u.test(value);
+    for (let start = 0; start < paragraph.length; start++) {
+      const opening = paragraph[start]; const closing = pairs[opening];
+      if (!closing || paragraph[start - 1] === '\\' || ((opening === "'" || opening === '‘') && word(paragraph[start - 1] || '') && word(paragraph[start + 1] || ''))) continue;
+      let depth = 1;
+      for (let at = start + 1; at < paragraph.length && paragraph[at] !== '\n'; at++) {
+        if (paragraph[at - 1] === '\\') continue;
+        if (opening !== closing && paragraph[at] === opening) { depth++; continue; }
+        if (paragraph[at] !== closing) continue;
+        if ((closing === "'" || closing === '’') && word(paragraph[at - 1] || '') && word(paragraph[at + 1] || '')) continue;
+        if (--depth) continue;
+        const end = at + 1; const text = paragraph.slice(start, end);
+        if (text.length > 2 && text.length <= 1800) candidates.push({ id: `${chapter.id}:${paragraphIndex}:${start}:${end}`, paragraphIndex, start, end, text });
+        start = at; break;
+      }
     }
   });
   return candidates;
 }
-function chunksFor(chapter: Chapter) {
+export function chunksFor(chapter: Chapter) {
   const candidates = extractDialogues(chapter);
   const chunks: DialogueCandidate[][] = [];
   let chunk: DialogueCandidate[] = [];
@@ -69,7 +94,7 @@ function chunksFor(chapter: Chapter) {
 function boundedUTF8(text: string, bytes: number) {
   return new TextDecoder().decode(encoder.encode(text).subarray(0, Math.max(0, bytes)), { stream: true });
 }
-function payloadFor(chapter: Chapter, candidates: DialogueCandidate[], known: Character[] = [], legacyPlan = false) {
+export function payloadFor(chapter: Chapter, candidates: DialogueCandidate[], known: Character[] = [], legacyPlan = false) {
   const indices = new Set<number>();
   for (const c of candidates) for (let i = Math.max(0, c.paragraphIndex - 1); i <= Math.min(chapter.paragraphs.length - 1, c.paragraphIndex + 1); i++) indices.add(i);
   const boundedKnown: { name: string; aliases: string[] }[] = [];
@@ -86,6 +111,28 @@ function payloadFor(chapter: Chapter, candidates: DialogueCandidate[], known: Ch
       const text = legacyPlan ? chapter.paragraphs[i].slice(0, 7000) : boundedUTF8(chapter.paragraphs[i].slice(start, start + 7000), bytesPerParagraph);
       return { paragraph: i, text };
     }), dialogues: candidates };
+}
+export function bookPayloadFor(chapter: Chapter, candidates: DialogueCandidate[], known: Character[]) {
+  const base = payloadFor(chapter, candidates);
+  const bounded: { id: string; name: string; aliases: string[] }[] = [];
+  for (const person of known.slice(0, 100)) {
+    const name = person.name.trim().slice(0, 80);
+    if (!name || !person.id || person.id.length > 512) continue;
+    const aliases = person.aliases.map(alias => alias.trim().slice(0, 80)).filter(Boolean).slice(0, 20);
+    const next = { id: person.id, name, aliases };
+    if (encoder.encode(JSON.stringify([...bounded, next])).length > 16000) break;
+    bounded.push(next);
+  }
+  return { ...base, known: bounded,
+    context: base.context.filter(row => row.text.trim()).map(row => {
+      const candidate = candidates.find(c => c.paragraphIndex === row.paragraph);
+      return { ...row, start: Math.max(0, (candidate?.start || 0) - 350) };
+    }) };
+}
+export function estimateBookChunk(chapter: Chapter, candidates: DialogueCandidate[], model: AIModel, known: Character[] = [], upper = false) {
+  const info = modelInfo(model);
+  const input = encoder.encode(AI_BOOK_SYSTEM_PROMPT + JSON.stringify(bookPayloadFor(chapter, candidates, known))).length + AI_TOKEN_OVERHEAD + (upper ? 18000 : 0);
+  return { input, usd: (input * info.inputPerMillion + OUTPUT_LIMIT * info.outputPerMillion) / 1_000_000 * AI_COST_MARGIN };
 }
 function chunkCost(chapter: Chapter, chunk: DialogueCandidate[], model: AIModel, known: Character[] = []) {
   const info = modelInfo(model);
@@ -153,6 +200,23 @@ async function callProxy(body: { action: string; [key: string]: unknown }, signa
     throw new AIError('代理网络请求失败或超时。已完成结果保留；分析请求可能已计费，请手动决定是否重试。');
   } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
 }
+/** A task holds this binding across every chapter, including a reading-progress wait. */
+export async function createBoundAnalysisSession(invalidate: () => void) {
+  const context = await requestContext(true);
+  const changed = () => { context.invalid = true; invalidate(); };
+  const stop = subscribeAuth(session => { if (session?.user.id !== context.userId) changed(); });
+  const keyChanged = () => { if (context.epoch !== keyEpoch) changed(); };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('onr-cloud-config-changed', changed);
+    window.addEventListener('onr-ai-key-changed', keyChanged);
+  }
+  return {
+    principal: { projectUrl: context.config.url, userId: context.userId },
+    assert: () => assertContext(context), check: () => currentSession(context),
+    request: (body: { action: string; [key: string]: unknown }, signal?: AbortSignal) => callProxy(body, signal, context),
+    close: () => { stop(); if (typeof window !== 'undefined') { window.removeEventListener('onr-cloud-config-changed', changed); window.removeEventListener('onr-ai-key-changed', keyChanged); } },
+  };
+}
 export interface AIProxyStatus { ready: true; upstreamChecked: false; models: string[]; limits: { maxTokens: number; maxRequestCostUsd: number } }
 /** Authenticated deployment check: no key is sent and DeepSeek is not contacted. */
 export async function checkAIProxy(): Promise<AIProxyStatus> {
@@ -171,7 +235,7 @@ async function stableCharacterId(bookId: string, name: string) {
   const digest = await crypto.subtle.digest('SHA-256', encoder.encode(bookId + ':' + normalizedName(name)));
   return bookId + ':character:' + [...new Uint8Array(digest)].map(x => x.toString(16).padStart(2, '0')).join('').slice(0, 24);
 }
-export async function createCharacter(bookId: string, name: string): Promise<Character> {
+export async function createCharacter(bookId: string, name: string, scope?: IdentityLocation): Promise<Character> {
   const clean = name.trim().slice(0, 80);
   if (!clean) throw new AIError('请输入人物名称。');
   const id = await stableCharacterId(bookId, clean);
@@ -179,14 +243,13 @@ export async function createCharacter(bookId: string, name: string): Promise<Cha
     const known = await db.characters.where('bookId').equals(bookId).toArray();
     const existing = known.find(c => [c.name, ...c.aliases].some(n => normalizedName(n) === normalizedName(clean)));
     if (existing) return existing;
-    const character: Character = { id, bookId, name: clean, aliases: [] };
+    let character: Character = { id, bookId, name: clean, aliases: [] };
+    if (scope) character = initializeCharacterIdentity(character, scope);
     await db.characters.put(character); return character;
   });
 }
-export async function renameCharacter(characterId: string, name: string): Promise<void> {
-  const character = await db.characters.get(characterId);
-  if (!character || !name.trim()) throw new AIError('人物或名称无效。');
-  await db.characters.update(characterId, { name: name.trim().slice(0, 80), aliases: [...new Set([...character.aliases, character.name])] });
+export async function renameCharacter(characterId: string, name: string, scope?: IdentityLocation): Promise<void> {
+  await manualRenameCharacter(characterId, name, scope);
 }
 export async function correctDialogue(dialogueId: string, characterId: string | null): Promise<void> {
   const dialogue = await db.dialogues.get(dialogueId);
@@ -197,20 +260,10 @@ export async function correctDialogue(dialogueId: string, characterId: string | 
     await db.dialogues.update(dialogueId, { characterId, source: 'manual', confidence: 1, updatedAt: Date.now() });
   });
 }
-export async function mergeCharacters(sourceId: string, targetId: string): Promise<void> {
-  const source = await db.characters.get(sourceId); const target = await db.characters.get(targetId);
-  if (!source || !target || source.bookId !== target.bookId || sourceId === targetId) throw new AIError('请选择同一本书中的两个不同人物。');
-  await db.transaction('rw', db.characters, db.dialogues, db.corrections, async () => {
-    await db.characters.update(targetId, { aliases: [...new Set([...target.aliases, ...source.aliases, source.name])] });
-    const dialogues = await db.dialogues.where('bookId').equals(source.bookId).toArray();
-    for (const dialogue of dialogues.filter(d => d.characterId === sourceId)) {
-      await db.dialogues.update(dialogue.id, { characterId: targetId, source: 'manual', updatedAt: Date.now() });
-      await db.corrections.put({ id: `manual:${dialogue.id}`, dialogueId: dialogue.id, bookId: source.bookId, characterId: targetId, updatedAt: Date.now() });
-    }
-    await db.characters.delete(sourceId);
-  });
+export async function mergeCharacters(sourceId: string, targetId: string, scope?: IdentityLocation): Promise<void> {
+  await manualMergeCharacters(sourceId, targetId, scope);
 }
-export interface ModelAttribution { id: string; speaker: string | null; confidence: number }
+export interface ModelAttribution { id: string; speaker: string | null; confidence: number; characterId?: string | null }
 type AttributionEvidence = Pick<ReturnType<typeof payloadFor>, 'known' | 'context'>;
 function hasSpeakerEvidence(speaker: string, evidence: AttributionEvidence) {
   const name = normalizedName(speaker);
@@ -235,36 +288,83 @@ export function validateAttributions(value: unknown, candidates: DialogueCandida
   }
   return candidates.map(c => valid.get(c.id) || { id: c.id, speaker: null, confidence: 0 });
 }
-async function saveChunk(chapter: Chapter, candidates: DialogueCandidate[], rows: ModelAttribution[], model: AIModel, checkpoint: AnalysisJob, assertLive: () => void) {
+export interface DeepChunkOptions {
+  sourceChapter: Chapter; input: ReturnType<typeof bookPayloadFor>; identities: IdentityProposal[];
+  review?: boolean;
+  commit?: () => Promise<void>;
+}
+export async function saveAnalysisChunk(chapter: Chapter, candidates: DialogueCandidate[], rows: ModelAttribution[], model: AIModel, checkpoint: AnalysisJob, assertLive: () => void, deep?: DeepChunkOptions) {
   // WebCrypto is completed before the IndexedDB transaction to keep it active.
-  const ids = new Map(await Promise.all([...new Set(rows.flatMap(r => r.speaker ? [r.speaker] : []))].map(async name => [name, await stableCharacterId(chapter.bookId, name)] as const)));
-  await db.transaction('rw', [db.books, db.chapters, db.characters, db.dialogues, db.corrections, db.jobs], async () => {
+  const ids = new Map(await Promise.all([...new Set(rows.flatMap(r => r.speaker ? [r.speaker] : []))].map(async name => {
+    const first = candidates.find(c => rows.find(row => row.id === c.id)?.speaker === name)!;
+    return [name, await stableCharacterId(chapter.bookId, deep ? `${name}:${chapter.id}:${first.paragraphIndex}:${first.start}` : name)] as const;
+  })));
+  await db.transaction('rw', [db.books, db.chapters, db.characters, db.dialogues, db.corrections, db.jobs, db.settings], async () => {
     assertLive();
     const book = await db.books.get(chapter.bookId);
     const currentChapter = await db.chapters.get(chapter.id);
-    if (!book || book.deletedAt || !currentChapter || JSON.stringify(currentChapter.paragraphs) !== JSON.stringify(chapter.paragraphs)) throw new AIError('书籍或章节已变化，当前片段未保存。');
+    if (!book || book.deletedAt || !currentChapter || JSON.stringify(currentChapter.paragraphs) !== JSON.stringify((deep?.sourceChapter || chapter).paragraphs)) throw new AIError('书籍或章节已变化，当前片段未保存。');
     const characters = await db.characters.where('bookId').equals(chapter.bookId).toArray();
+    const legacy = deep?.identities.some(proposal => characters.some(character => !character.identity && (character.id === proposal.characterId || character.id === proposal.targetId)));
+    const introductions = legacy ? indexCharacterIntroductions(
+      characters,
+      await db.dialogues.where('bookId').equals(chapter.bookId).toArray(),
+      await db.chapters.where('bookId').equals(chapter.bookId).toArray(),
+    ) : undefined;
+    if (deep) for (const proposal of deep.identities) {
+      const index = characters.findIndex(person => person.id === proposal.characterId);
+      if (index < 0) continue;
+      const updated = applyIdentityProposal(characters[index], proposal, { chapter, context: deep.input.context, characters, knownIds: deep.input.known.map(person => person.id), introductions });
+      if (updated) { characters[index] = updated; await db.characters.put(updated); }
+    }
     for (const candidate of candidates) {
       const correction = await db.corrections.get(`manual:${candidate.id}`);
       const previous = await db.dialogues.get(candidate.id);
       const row = rows.find(r => r.id === candidate.id)!;
       const manual = !!correction || previous?.source === 'manual';
+      // An inconclusive review cannot erase an already attributed line.
+      if (deep?.review && previous && !manual && previous.characterId && (!row.speaker || row.confidence < previous.confidence)) continue;
       let character: Character | undefined;
       if (row.speaker && !manual) {
-        character = characters.find(c => [c.name, ...c.aliases].some(n => normalizedName(n) === normalizedName(row.speaker!)));
+        if (deep) {
+          const named = characters.filter(c => [c.name, ...c.aliases].some(n => normalizedName(n) === normalizedName(row.speaker!)));
+          if (row.characterId && deep.input.known.some(person => person.id === row.characterId)) character = characters.find(c => c.id === row.characterId && [c.name, ...c.aliases].some(n => normalizedName(n) === normalizedName(row.speaker!)));
+          if (!character) character = named.find(person => person.id === ids.get(row.speaker!));
+          // Existing names alone are not sufficient to identify a person in another chapter.
+        } else character = characters.find(c => [c.name, ...c.aliases].some(n => normalizedName(n) === normalizedName(row.speaker!)));
         if (!character) {
-          character = { id: ids.get(row.speaker)!, bookId: chapter.bookId, name: row.speaker, aliases: [] };
-          await db.characters.put(character); characters.push(character);
+          const blocked = deep && row.characterId !== null && characters.some(c => [c.name, ...c.aliases].some(n => normalizedName(n) === normalizedName(row.speaker!)));
+          if (!blocked) {
+            character = { id: ids.get(row.speaker)!, bookId: chapter.bookId, name: row.speaker, aliases: [] };
+            if (deep) character = initializeCharacterIdentity(character, { chapterIndex: chapter.index, paragraphIndex: candidate.paragraphIndex, offset: candidate.start });
+            await db.characters.put(character); characters.push(character);
+          }
         }
       }
+      // Persist the source identity. The reader resolves redirects only after their reveal position.
+      if (deep?.review && previous?.characterId && !manual && !character) continue;
       const dialogue: Dialogue = { ...candidate, bookId: chapter.bookId, chapterId: chapter.id,
         characterId: correction ? correction.characterId : manual ? previous!.characterId : character?.id || null,
-        confidence: manual ? 1 : row.confidence, source: manual ? 'manual' : 'ai', model, updatedAt: Date.now() };
+        confidence: manual ? 1 : row.confidence, source: manual ? 'manual' : 'ai', model, updatedAt: Date.now(),
+        ...(manual && previous?.speakerLabel ? { speakerLabel: previous.speakerLabel } : deep && !manual && character && row.speaker ? { speakerLabel: row.speaker } : {}) };
       await db.dialogues.put(dialogue);
     }
     assertLive();
     // A chunk and its paid-work checkpoint commit together, including manual overrides.
     await db.jobs.put(checkpoint);
+    if (deep?.commit) await deep.commit();
+  });
+}
+export function validateDeepAttributions(value: unknown, candidates: DialogueCandidate[], input: ReturnType<typeof bookPayloadFor>): ModelAttribution[] {
+  const rows = (value as { dialogues?: unknown })?.dialogues;
+  const ids = new Set(candidates.map(candidate => candidate.id));
+  if (!Array.isArray(rows) || rows.length !== candidates.length || rows.some(row => !row || typeof row.id !== 'string' || !ids.delete(row.id) || (row.characterId !== null && (typeof row.characterId !== 'string' || !input.known.some(person => person.id === row.characterId))))) {
+    throw new AIError('整书分析返回的对白编号或人物 ID 不完整，当前片段未保存。');
+  }
+  const validated = validateAttributions(value, candidates, { known: [], context: input.context });
+  return validated.map(row => {
+    const id = rows.find(item => item.id === row.id).characterId as string | null;
+    return { ...row, characterId: id };
   });
 }
 /** Atomic across tabs: simultaneous retries cannot each spend the same remaining task allowance. */
@@ -368,7 +468,7 @@ export function analyzeChapter(options: AnalysisOptions): AnalysisController {
           await currentSession(context);
           assertWork();
           const next = { ...job, completedChunks: i + 1, updatedAt: Date.now() };
-          await saveChunk(chapter, chunks[i], validateAttributions(data, chunks[i], input), options.model, next, assertWork);
+          await saveAnalysisChunk(chapter, chunks[i], validateAttributions(data, chunks[i], input), options.model, next, assertWork);
           job = next; announce();
         }
         await update({ status: cancelled ? 'cancelled' : 'done' });
@@ -386,14 +486,15 @@ export function analyzeChapter(options: AnalysisOptions): AnalysisController {
     }
   };
   controller.done = (async () => {
+    if (bookActive.has(options.bookId)) throw new AIError('这本书正在进行整书分析，请先结束原任务。');
     if (active.has(slot)) throw new AIError('当前章节已有分析任务，请先暂停或取消原任务。');
     active.set(slot, controller);
     try {
       if (typeof navigator !== 'undefined' && navigator.locks?.request) {
-        return await navigator.locks.request(`onr-ai:${slot}`, { ifAvailable: true }, lock => {
+        return await withAnalysisBookLock(options.bookId, () => navigator.locks.request(`onr-ai:${slot}`, { ifAvailable: true }, lock => {
           if (!lock) throw new AIError('另一个窗口正在分析当前章节，请先结束原任务。');
           return run();
-        });
+        }));
       }
       return await run();
     } finally { if (active.get(slot) === controller) active.delete(slot); }

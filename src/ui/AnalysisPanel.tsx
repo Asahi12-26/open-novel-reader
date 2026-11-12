@@ -1,24 +1,26 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, LoaderCircle, Pause, Play, RotateCcw, Sparkles, Square } from 'lucide-react';
 import { db } from '../core/db';
 import type { AnalysisJob, Chapter, Character, Dialogue } from '../types';
 import { AI_MODELS, analyzeChapter, estimateAnalysis, hasAIKey } from '../services/ai';
 import type { AIModel, AnalysisController } from '../services/ai';
 import { Modal, notify, useQuery } from './common';
+import type { IdentityScope } from '../services/character-identity';
 
 const statusLabels: Record<AnalysisJob['status'], string> = {
   queued: '准备中', running: '正在阅读与识别', paused: '已暂停', done: '识别完成', failed: '分析失败', cancelled: '已取消',
 };
 
-export default function AnalysisPanel({ chapter, onClose, onViewResults }: {
-  chapter: Chapter; onClose: () => void; onViewResults?: (chapter: Chapter) => void;
+export default function AnalysisPanel({ chapter, scope, getCharacter, showAll = false, blockedByBookTask = false, onOpenBookAnalysis, onClose, onViewResults }: {
+  chapter: Chapter; scope: IdentityScope; getCharacter: (id: string | null) => Character | undefined; showAll?: boolean; onOpenBookAnalysis?: () => void;
+  blockedByBookTask?: boolean;
+  onClose: () => void; onViewResults?: (chapter: Chapter) => void;
 }) {
   const [chapterId, setChapterId] = useState(chapter.id);
   const chapters = useQuery(() => db.chapters.where('bookId').equals(chapter.bookId).sortBy('index'), [chapter.bookId], [chapter]);
   const selected = chapters.find(item => item.id === chapterId) || chapter;
   const savedJobs = useQuery(() => db.jobs.where('chapterId').equals(selected.id).and(item => item.bookId === chapter.bookId).toArray(), [selected.id, chapter.bookId], [] as AnalysisJob[]);
   const savedDialogues = useQuery(() => db.dialogues.where('chapterId').equals(selected.id).and(item => item.bookId === chapter.bookId).toArray(), [selected.id, chapter.bookId], [] as Dialogue[]);
-  const characters = useQuery(() => db.characters.where('bookId').equals(chapter.bookId).toArray(), [chapter.bookId], [] as Character[]);
   // Live queries keep their previous value until the next chapter's read finishes.
   const dialogues = savedDialogues.filter(item => item.chapterId === selected.id && item.bookId === selected.bookId);
   const savedJob = savedJobs.filter(item => item.chapterId === selected.id && item.bookId === selected.bookId).sort((a, b) => b.updatedAt - a.updatedAt)[0];
@@ -32,12 +34,13 @@ export default function AnalysisPanel({ chapter, onClose, onViewResults }: {
   const [pauseRequested, setPauseRequested] = useState(false);
   const controller = useRef<AnalysisController | null>(null);
   const mounted = useRef(true);
-  const estimate = estimateAnalysis(selected, model);
+  const estimate = useMemo(() => estimateAnalysis(selected, model), [selected, model]);
   const budgetValue = Number(budget);
   const validBudget = Number.isFinite(budgetValue) && budgetValue > 0 && budgetValue <= 10;
   const resumable = !!job && job.status !== 'done' && job.completedChunks < job.totalChunks && (!job.model || job.model === model);
   const attributed = dialogues.filter(item => item.characterId !== null).length;
   const corrected = dialogues.filter(item => item.source === 'manual').length;
+  const resultVisible = showAll || selected.index <= scope.chapterIndex;
 
   useEffect(() => {
     mounted.current = true;
@@ -52,7 +55,7 @@ export default function AnalysisPanel({ chapter, onClose, onViewResults }: {
   }, [selected.id, savedJob?.id, savedJob?.updatedAt]);
 
   async function start(resume = false) {
-    if (controller.current) return;
+    if (controller.current || blockedByBookTask) return;
     if (!authorized) { setError('请先明确授权本次章节分析。'); return; }
     setError(''); setAuthorized(false); setPauseRequested(false); setWorking(true);
     try {
@@ -80,8 +83,10 @@ export default function AnalysisPanel({ chapter, onClose, onViewResults }: {
   };
 
   return <Modal title="听见故事里的人" onClose={close}>
+    {onOpenBookAnalysis && <div className="analysis-mode-switch"><strong>逐章分析</strong><button className="secondary" disabled={working} onClick={onOpenBookAnalysis}><BookOpen size={16}/>整书分析</button></div>}
     <div className="ai-intro"><span><Sparkles size={25}/></span><div><h3>章节人物识别</h3><p>{selected.title}</p></div></div>
     <p className="muted">选择一章，开始后自动识别对白、判断人物并保存结果。不确定的归属保留为「未知」，人工纠正始终优先。</p>
+    {blockedByBookTask && <p className="inline-warning">整书任务正在运行。请先在整书任务面板停止本次会话，再单独分析章节，避免重复请求。</p>}
     <label className="form-label">选择分析章节<select value={selected.id} disabled={working} onChange={event => { setChapterId(event.target.value); setJob(null); setAuthorized(false); setError(''); }}>{chapters.map(item => <option key={item.id} value={item.id}>{item.index + 1}. {item.title}</option>)}</select></label>
     <label className="form-label">模型<select value={model} disabled={working} onChange={event => { setModel(event.target.value as AIModel); setAuthorized(false); }}>{AI_MODELS.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
     <div className="estimate-box">
@@ -105,15 +110,16 @@ export default function AnalysisPanel({ chapter, onClose, onViewResults }: {
         <button className="secondary" onClick={() => { if (pauseRequested) controller.current?.resume(); else controller.current?.pause(); setPauseRequested(!pauseRequested); }}>{pauseRequested ? <Play size={16}/> : <Pause size={16}/>} {pauseRequested ? '继续分析' : '当前分片后暂停'}</button>
         <button className="secondary" onClick={() => controller.current?.cancel()}><Square size={15}/>取消任务</button><LoaderCircle className="spin muted" size={18}/>
       </> : <>
-        <button className="primary" disabled={!authorized || !keyReady || !validBudget || !estimate.dialogueCount || budgetValue < estimate.estimatedMaxUsd} onClick={() => void start()}><Sparkles size={16}/>授权并分析所选章节</button>
-        {resumable && <button className="secondary" disabled={!authorized || !keyReady || !validBudget || budgetValue <= (job?.reservedUsd || 0)} onClick={() => void start(true)}><RotateCcw size={16}/>从上次进度继续</button>}
+        <button className="primary" disabled={blockedByBookTask || !authorized || !keyReady || !validBudget || !estimate.dialogueCount || budgetValue < estimate.estimatedMaxUsd} onClick={() => void start()}><Sparkles size={16}/>授权并分析所选章节</button>
+        {resumable && <button className="secondary" disabled={blockedByBookTask || !authorized || !keyReady || !validBudget || budgetValue <= (job?.reservedUsd || 0)} onClick={() => void start(true)}><RotateCcw size={16}/>从上次进度继续</button>}
       </>}
     </div>
-    {dialogues.length > 0 && <section className="analysis-results" aria-label="已保存的人物识别结果">
+    {dialogues.length > 0 && resultVisible && <section className="analysis-results" aria-label="已保存的人物识别结果">
       <h3>已保存的识别结果</h3><p className="muted">{dialogues.length} 句对白 · {attributed} 句已归属 · {dialogues.length - attributed} 句未知 · {corrected} 句人工纠正</p>
-      <ul>{dialogues.slice(0, 5).map(item => <li key={item.id}><strong>{characters.find(person => person.id === item.characterId)?.name || '未知人物'}</strong>：{item.text.slice(0, 90)}{item.source === 'manual' && '（人工）'}</li>)}</ul>
+      <ul>{dialogues.slice(0, 5).map(item => <li key={item.id}><strong>{getCharacter(item.characterId)?.name || '未知人物'}</strong>：{item.text.slice(0, 90)}{item.source === 'manual' && '（人工）'}</li>)}</ul>
       {onViewResults && <button className="secondary" disabled={working} onClick={() => onViewResults(selected)}><BookOpen size={16}/>在正文查看与纠正</button>}
     </section>}
-    <p className="fine-print">每次重试都需要重新授权，不会自动重试收费请求。暂停在当前分片后生效，关闭面板会取消在途请求并保留已完成结果。当前优先逐章分析，不会后台分析整本书。</p>
+    {dialogues.length > 0 && !resultVisible && <p className="fine-print">所选章节的结果已保存；未来章节的人物与对白预览默认隐藏，可在正文阅读到该章节时查看。</p>}
+    <p className="fine-print">重试需要重新授权。暂停在当前分片后生效，关闭面板会取消在途请求并保留已完成结果。</p>
   </Modal>;
 }

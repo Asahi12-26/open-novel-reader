@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { motion, useIsPresent } from 'motion/react';
 import { ArrowLeft, ArrowRight, Bookmark as BookmarkIcon, Check, ChevronLeft, ChevronRight, List, Settings2, Sparkles, Users, X } from 'lucide-react';
@@ -8,6 +8,8 @@ import type { Book, Bookmark, Chapter, Dialogue, Preferences, ReadingProgress } 
 import { BookCover, Modal, notify, run, useQuery, useMotionPreference as useReducedMotion } from './common';
 import { correctDialogue, createCharacter, mergeCharacters, renameCharacter } from '../services/ai';
 import AnalysisPanel from './AnalysisPanel';
+import BookAnalysisPanel from './BookAnalysisPanel';
+import { compareIdentityLocations, createIdentityProjector, manualAddAlias, manualRemoveAlias, type IdentityScope } from '../services/character-identity';
 
 interface Props { book: Book; chapters: Chapter[]; progress?: ReadingProgress; fromOcean?: boolean; preferences: Preferences; onPreferences: (patch: Partial<Preferences>) => void; onClose: () => void }
 function characterRect(element: HTMLElement, offset: number): DOMRect {
@@ -30,11 +32,17 @@ export default function Reader({ book, chapters, progress, fromOcean = true, pre
   const [toc, setToc] = useState(false);
   const [appearance, setAppearance] = useState(false);
   const [analysis, setAnalysis] = useState(false);
+  const [bookAnalysis, setBookAnalysis] = useState(false);
+  const [bookAnalysisRevision, setBookAnalysisRevision] = useState(0);
+  const [bookTaskActive, setBookTaskActive] = useState(false);
+  const [showAllCharacters, setShowAllCharacters] = useState(false);
   const [bookmarkList, setBookmarkList] = useState(false);
   const [characterPanel, setCharacterPanel] = useState(false);
   const [selectedDialogue, setSelectedDialogue] = useState<Dialogue | null>(null);
   const [newName, setNewName] = useState('');
+  const [aliasDrafts, setAliasDrafts] = useState<Record<string, string>>({});
   const [position, setPosition] = useState(progress?.paragraphIndex ?? 0);
+  const [positionOffset, setPositionOffset] = useState(progress?.offset ?? 0);
   const scroller = useRef<HTMLDivElement>(null);
   const target = useRef({ chapterId: chapters[first].id, paragraphIndex: progress?.paragraphIndex ?? 0, offset: progress?.offset ?? 0 });
   const latest = useRef(target.current);
@@ -67,6 +75,22 @@ export default function Reader({ book, chapters, progress, fromOcean = true, pre
   const marks = useQuery(() => db.bookmarks.where('bookId').equals(book.id).toArray(), [book.id], []);
   const characters = useQuery(() => db.characters.where('bookId').equals(book.id).toArray(), [book.id], []);
   const dialogues = useQuery(() => db.dialogues.where('chapterId').equals(chapter.id).toArray(), [chapter.id], []);
+  const allDialogues = useQuery(() => db.dialogues.where('bookId').equals(book.id).toArray(), [book.id], []);
+  const identityScope = useMemo<IdentityScope>(() => ({ chapterIndex: chapter.index, paragraphIndex: position, offset: positionOffset }), [chapter.index, position, positionOffset]);
+  const projectIdentities = useMemo(() => createIdentityProjector(characters, allDialogues, chapters), [characters, allDialogues, chapters]);
+  const identities = useMemo(() => projectIdentities(identityScope, showAllCharacters), [projectIdentities, identityScope, showAllCharacters]);
+  const visibleCharacters = characterPanel || selectedDialogue ? identities.characters : [];
+  const dialoguesByParagraph = useMemo(() => {
+    const rows = new Map<number, Dialogue[]>();
+    for (const dialogue of dialogues) {
+      if (dialogue.chapterId !== chapter.id || dialogue.bookId !== book.id) continue;
+      const paragraph = rows.get(dialogue.paragraphIndex);
+      if (paragraph) paragraph.push(dialogue);
+      else rows.set(dialogue.paragraphIndex, [dialogue]);
+    }
+    for (const paragraph of rows.values()) paragraph.sort((a, b) => a.start - b.start);
+    return rows;
+  }, [dialogues, chapter.id, book.id]);
   const percentage = Math.round(((index + Math.min(1, (position + 1) / Math.max(1, chapter.paragraphs.length))) / chapters.length) * 100);
   useEffect(() => {
     const bodyOverflow = document.body.style.overflow; document.body.style.overflow = 'hidden';
@@ -88,6 +112,7 @@ export default function Reader({ book, chapters, progress, fromOcean = true, pre
       if (location.paragraphIndex === 0 && !location.offset) root.scrollTop = 0;
       else if (para) scrollToAnchor(root,para,location.offset);
       setPosition(location.paragraphIndex);
+      setPositionOffset(location.offset);
       latest.current = { chapterId: chapter.id, paragraphIndex: location.paragraphIndex, offset: location.offset };
       restored.current = true;
       void run(() => saveProgress(book.id,chapter.id,location.paragraphIndex,location.offset));
@@ -106,7 +131,7 @@ export default function Reader({ book, chapters, progress, fromOcean = true, pre
         while(start<end){const mid=Math.floor((start+end)/2);if(characterRect(paragraph,mid).top<top)start=mid+1;else end=mid;}
         offset=start;
       }
-      latest.current = { chapterId: chapter.id, paragraphIndex: visible, offset }; setPosition(visible);
+      latest.current = { chapterId: chapter.id, paragraphIndex: visible, offset }; setPosition(visible); setPositionOffset(offset);
       clearTimeout(timer); timer = setTimeout(persist, 300);
     };
     root.addEventListener('scroll', scroll, { passive: true });
@@ -130,6 +155,7 @@ export default function Reader({ book, chapters, progress, fromOcean = true, pre
     try { await saveProgress(book.id,chapters[next].id,paragraphIndex,0); }
     catch { notify('阅读位置保存失败，请检查设备存储空间。'); }
     if (ticket !== navigation.current) return;
+    setPosition(paragraphIndex); setPositionOffset(0);
     if (next === index) { const root = scroller.current; const p = root?.querySelector<HTMLElement>(`[data-paragraph="${paragraphIndex}"]`); if (root && p) { if(paragraphIndex)scrollToAnchor(root,p,0);else root.scrollTop=0; } }
     else setIndex(next);
     if(next === index) restored.current = true;
@@ -143,13 +169,14 @@ export default function Reader({ book, chapters, progress, fromOcean = true, pre
   }, '已为当前段落添加书签');
   function renderParagraph(text: string, p: number): ReactNode {
     if (!preferences.showCharacters) return text;
-    const rows = dialogues.filter(d => d.paragraphIndex === p).sort((a,b) => a.start - b.start);
-    if (!rows.length) return text;
+    const rows = dialoguesByParagraph.get(p);
+    if (!rows?.length) return text;
     const parts: ReactNode[] = []; let end = 0;
     for (const d of rows) {
       if (d.start < end || text.slice(d.start,d.end) !== d.text) continue;
       parts.push(text.slice(end,d.start));
-      parts.push(<span className="dialogue-text" key={d.id}>{text.slice(d.start,d.end)}<button className={`character-tag ${d.source === 'manual' ? 'manual' : ''}`} aria-label={`说话人物：${characters.find(c => c.id === d.characterId)?.name || '未知'}，点击纠正`} onClick={() => setSelectedDialogue(d)}>{characters.find(c => c.id === d.characterId)?.name || '未知'}{d.source === 'manual' && <Check size={9}/>}</button></span>); end = d.end;
+      const name = identities.character(d.characterId)?.name || '未知';
+      parts.push(<span className="dialogue-text" key={d.id}>{text.slice(d.start,d.end)}<button className={`character-tag ${d.source === 'manual' ? 'manual' : ''}`} aria-label={`说话人物：${name}，点击纠正`} onClick={() => setSelectedDialogue(d)}>{name}{d.source === 'manual' && <Check size={9}/>}</button></span>); end = d.end;
     }
     parts.push(text.slice(end)); return parts;
   }
@@ -164,8 +191,25 @@ export default function Reader({ book, chapters, progress, fromOcean = true, pre
       <footer className="reader-footer"><button disabled={index === 0} onClick={() => goChapter(index-1)} aria-label="上一章"><ChevronLeft size={17}/><span>上一章</span></button><span className="reader-position">{chapter.title}<small>{index+1} / {chapters.length} 章 · {percentage}%</small></span><button disabled={index === chapters.length-1} onClick={() => goChapter(index+1)} aria-label="下一章"><span>下一章</span><ChevronRight size={17}/></button></footer><div className="reader-progress"><i style={{width:`${percentage}%`}}/></div>
     </div>
     {bookmarkList && <Modal title="故事里的停靠点" onClose={() => setBookmarkList(false)}>{marks.length ? <div className="bookmark-list">{marks.map(m => <div key={m.id}><button onClick={() => goChapter(chapters.findIndex(c => c.id === m.chapterId),m.paragraphIndex)}><small>{chapters.find(c => c.id === m.chapterId)?.title}</small>{m.label}</button><button className="icon-button" aria-label="删除书签" onClick={() => void run(() => db.bookmarks.delete(m.id))}><X size={17}/></button></div>)}</div> : <div className="modal-empty"><BookmarkIcon size={30}/><p>读到喜欢的段落，就为它留一个书签。</p></div>}</Modal>}
-    {analysis && <AnalysisPanel chapter={chapter} onClose={() => setAnalysis(false)} onViewResults={target => { setAnalysis(false); void goChapter(chapters.findIndex(item => item.id === target.id)); }}/>}
-    {selectedDialogue && <Modal title="这一句，是谁说的？" onClose={() => setSelectedDialogue(null)}><blockquote className="dialogue-quote">{selectedDialogue.text}</blockquote><p className="muted">人工纠正会优先保留，不会被后续 AI 分析覆盖。</p><div className="character-choices"><button onClick={() => void run(async () => { await correctDialogue(selectedDialogue.id,null); setSelectedDialogue(null); })}>未知人物</button>{characters.map(c => <button key={c.id} onClick={() => void run(async () => { await correctDialogue(selectedDialogue.id,c.id); setSelectedDialogue(null); })}>{c.name}</button>)}</div><form className="inline-form" onSubmit={e => { e.preventDefault(); if (!newName.trim()) return; void run(async () => { const c = await createCharacter(book.id,newName); await correctDialogue(selectedDialogue.id,c.id); setNewName(''); setSelectedDialogue(null); }); }}><input aria-label="新人物名称" value={newName} onChange={e => setNewName(e.target.value)} maxLength={80} placeholder="或新建人物"/><button className="secondary" type="submit">新建并指定</button></form></Modal>}
-    {characterPanel && <Modal title="书中的人物" onClose={() => setCharacterPanel(false)}><p className="muted">人物信息仅显示名称与别名，避免提前透露故事。</p>{characters.length ? <div className="character-manager">{characters.map(c => <div key={c.id}><input aria-label={`人物 ${c.name} 名称`} defaultValue={c.name} maxLength={80} onBlur={e => { if (e.target.value.trim() && e.target.value !== c.name) void run(() => renameCharacter(c.id,e.target.value)); }}/><small>{c.aliases.join('、') || '暂无别名'}</small><select aria-label={`合并 ${c.name}`} value="" onChange={e => { if (e.target.value) void run(() => mergeCharacters(c.id,e.target.value), '人物已合并，原名保留为别名'); }}><option value="">合并到…</option>{characters.filter(other => other.id !== c.id).map(other => <option key={other.id} value={other.id}>{other.name}</option>)}</select></div>)}</div> : <div className="modal-empty"><Users size={30}/><p>使用章节人物识别，或手动添加第一位人物。</p></div>}<form className="inline-form" onSubmit={e => {e.preventDefault(); if (newName.trim()) void run(async () => {await createCharacter(book.id,newName);setNewName('');});}}><input aria-label="添加人物名称" placeholder="人物名称" maxLength={80} value={newName} onChange={e => setNewName(e.target.value)}/><button className="secondary">添加人物</button></form></Modal>}
+    {analysis && <AnalysisPanel chapter={chapter} scope={identityScope} getCharacter={identities.character} showAll={showAllCharacters} blockedByBookTask={bookTaskActive} onOpenBookAnalysis={() => { setAnalysis(false); setBookAnalysis(true); setBookAnalysisRevision(value => value + 1); }} onClose={() => setAnalysis(false)} onViewResults={target => { setAnalysis(false); void goChapter(chapters.findIndex(item => item.id === target.id)); }}/>}
+    {bookAnalysis && <BookAnalysisPanel bookId={book.id} chapters={chapters} dialogues={allDialogues} scope={identityScope} getCharacter={identities.character} showAll={showAllCharacters} openRevision={bookAnalysisRevision} onActivity={setBookTaskActive} onClose={() => { setBookAnalysis(false); setBookTaskActive(false); }} onViewResults={(target, paragraphIndex) => void goChapter(chapters.findIndex(item => item.id === target.id), paragraphIndex)}/>}
+    {selectedDialogue && <Modal title="这一句，是谁说的？" onClose={() => setSelectedDialogue(null)}>
+      <blockquote className="dialogue-quote">{selectedDialogue.text}</blockquote>
+      <p className="muted">人工纠正会优先保留，不会被后续 AI 分析覆盖。人物选项默认只显示当前阅读范围内的身份。</p>
+      <div className="character-choices"><button onClick={() => void run(async () => { await correctDialogue(selectedDialogue.id, null); setSelectedDialogue(null); })}>未知人物</button>{visibleCharacters.map(person => <button key={person.id} onClick={() => void run(async () => { await correctDialogue(selectedDialogue.id, person.id); setSelectedDialogue(null); })}>{person.name}</button>)}</div>
+      <form className="inline-form" onSubmit={event => { event.preventDefault(); if (!newName.trim()) return; void run(async () => { const person = await createCharacter(book.id, newName, identityScope); await correctDialogue(selectedDialogue.id, person.id); setNewName(''); setSelectedDialogue(null); }); }}><input aria-label="新人物名称" value={newName} onChange={event => setNewName(event.target.value)} maxLength={80} placeholder="或新建人物"/><button className="secondary" type="submit">新建并指定</button></form>
+    </Modal>}
+    {characterPanel && <Modal title="书中的人物" onClose={() => setCharacterPanel(false)}>
+      <p className="muted">默认隐藏未来人物、别名和身份揭示。人工改名与合并会留下历史记录，原对白关联保留。</p>
+      <label className="checkbox-row"><input aria-label="显示全书人物信息（可能剧透）" type="checkbox" checked={showAllCharacters} onChange={event => setShowAllCharacters(event.target.checked)}/>显示全书人物信息（可能剧透）</label>
+      {visibleCharacters.length ? <div className="character-manager">{visibleCharacters.map(person => <div className="character-manager-item" key={`${person.id}:${person.name}`}>
+        <input aria-label={`人物 ${person.name} 名称`} defaultValue={person.name} maxLength={80} onBlur={event => { if (event.target.value.trim() && event.target.value !== person.name) void run(() => renameCharacter(person.id, event.target.value, identityScope)); }}/>
+        <div className="known-aliases">{person.aliases.length ? person.aliases.map(alias => <span key={alias}>{alias}<button className="text-button" aria-label={`移除 ${person.name} 的别名 ${alias}`} onClick={() => void run(() => manualRemoveAlias(person.id, alias, identityScope))}>×</button></span>) : <small>暂无已知别名</small>}</div>
+        <select aria-label={`合并 ${person.name}`} value="" onChange={event => { if (event.target.value) void run(() => mergeCharacters(person.id, event.target.value, identityScope), '人物已合并，原身份与对白关联保留在历史中'); }}><option value="">合并到…</option>{visibleCharacters.filter(other => other.id !== person.id).map(other => <option key={other.id} value={other.id}>{other.name}</option>)}</select>
+        <form className="inline-form character-alias-form" onSubmit={event => { event.preventDefault(); const alias = aliasDrafts[person.id]?.trim(); if (alias) void run(async () => { await manualAddAlias(person.id, alias, identityScope); setAliasDrafts(current => ({ ...current, [person.id]: '' })); }); }}><input aria-label={`为 ${person.name} 添加别名`} value={aliasDrafts[person.id] || ''} maxLength={80} placeholder="添加已知别名" onChange={event => setAliasDrafts(current => ({ ...current, [person.id]: event.target.value }))}/><button className="secondary">添加别名</button></form>
+        {!!person.identity?.events.some(event => showAllCharacters || compareIdentityLocations(event.at, identityScope) <= 0) && <details className="identity-history"><summary>身份变更记录</summary><ul>{person.identity.events.filter(event => showAllCharacters || compareIdentityLocations(event.at, identityScope) <= 0).slice(-20).map(event => <li key={event.id}><strong>第 {event.at.chapterIndex + 1} 章 · {event.source === 'manual' ? '人工' : 'AI'}</strong> {event.kind === 'rename' ? `改名为 ${event.value}` : event.kind === 'alias' ? `${event.active === false ? '移除' : '添加'}别名 ${event.value}` : '合并身份（保留原关联）'}{event.evidence && <small>证据：{event.evidence.text.slice(0, 90)}</small>}</li>)}</ul></details>}
+      </div>)}</div> : <div className="modal-empty"><Users size={30}/><p>当前已读范围没有已知人物；可使用人物识别，或手动添加。</p></div>}
+      <form className="inline-form" onSubmit={event => { event.preventDefault(); if (newName.trim()) void run(async () => { await createCharacter(book.id, newName, identityScope); setNewName(''); }); }}><input aria-label="添加人物名称" placeholder="人物名称" maxLength={80} value={newName} onChange={event => setNewName(event.target.value)}/><button className="secondary">添加人物</button></form>
+    </Modal>}
   </motion.section>;
 }

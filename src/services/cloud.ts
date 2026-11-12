@@ -2,6 +2,7 @@ import { createClient, type AuthChangeEvent, type Session, type SupabaseClient, 
 import { db } from '../core/db';
 import { MAX_FILE_BYTES, parseEpub, parseTxt } from '../core/parser';
 import { defaultPreferences } from '../types';
+import { mergeCharacterIdentity, validCharacterIdentity, validIdentityGraph } from './character-identity';
 import type { Book, BookFile, Chapter, ReadingProgress, Bookmark, Character, Dialogue, CharacterCorrection, AnalysisJob, Bookshelf, Preferences } from '../types';
 
 export interface CloudConfig { url: string; anonKey: string }
@@ -308,13 +309,31 @@ export function mergeBundles(local: BookBundle, remote: BookBundle, base: BookBu
   const { deletedAt: _previousDeletion, ...liveBook } = restoration || book;
   // An older tombstone's empty lists are not new annotation deletions after explicit reimport.
   const listBase = deletedAt && restoredAt > deletedAt ? { ...base, bookmarks: [], characters: [], dialogues: [], corrections: [], jobs: [] } : base;
+  const localCharacters = new Map(local.characters.map(character => [character.id, character]));
+  const remoteCharacters = new Map(remote.characters.map(character => [character.id, character]));
+  const baseCharacters = new Map(listBase.characters.map(character => [character.id, character]));
+  // A legacy client can destructively merge rows. A V0.4 identity ID may still have historical references.
+  if (listBase.characters.some(character => {
+    const local = localCharacters.get(character.id);
+    const remote = remoteCharacters.get(character.id);
+    return (character.identity || local?.identity || remote?.identity) && (!local || !remote);
+  })) {
+    throw new Error('另一台设备移除了带历史记录的人物，本机记录已保留。请在新版阅读器复核人物后同步。');
+  }
   const progress = !local.progress ? remote.progress : !remote.progress ? local.progress :
     local.progress.updatedAt >= remote.progress.updatedAt ? local.progress : remote.progress;
   const merged: BookBundle = {
     schema: 1, book: { ...liveBook, ...(restoredAt ? { restoredAt } : {}), cloudEnabled: true },
     chapters: local.chapters.length ? local.chapters : remote.chapters, progress,
     bookmarks: mergeList(local.bookmarks, remote.bookmarks, listBase.bookmarks),
-    characters: mergeList(local.characters, remote.characters, listBase.characters),
+    characters: mergeList(local.characters, remote.characters, listBase.characters).map(chosen => {
+      const left = localCharacters.get(chosen.id);
+      const right = remoteCharacters.get(chosen.id);
+      const other = chosen === left ? right : left;
+      const historical = baseCharacters.get(chosen.id);
+      const current = other ? mergeCharacterIdentity(chosen, other) : chosen;
+      return historical?.identity ? mergeCharacterIdentity(current, historical) : current;
+    }),
     dialogues: mergeList(local.dialogues, remote.dialogues, listBase.dialogues),
     corrections: mergeList(local.corrections, remote.corrections, listBase.corrections),
     jobs: mergeList(local.jobs, remote.jobs, listBase.jobs), file: !local.book.deletedAt && local.file ? local.file : remote.file || local.file,
@@ -324,7 +343,8 @@ export function mergeBundles(local: BookBundle, remote: BookBundle, base: BookBu
   const remap = (id: string | null): string | null => {
     if (!id || characters.has(id)) return id;
     const old = previousCharacters.get(id);
-    return old ? merged.characters.find(c => [c.name, ...c.aliases].some(name => [old.name, ...old.aliases].includes(name)))?.id || null : null;
+    // V0.4 identities can share names. A missing stable ID cannot be guessed from its label.
+    return old && !old.identity ? merged.characters.find(c => !c.identity && [c.name, ...c.aliases].some(name => [old.name, ...old.aliases].includes(name)))?.id || null : null;
   };
   merged.corrections = merged.corrections.map(c => ({ ...c, characterId: remap(c.characterId) }));
   const corrections = new Map(merged.corrections.map(c => [c.dialogueId, c]));
@@ -332,6 +352,7 @@ export function mergeBundles(local: BookBundle, remote: BookBundle, base: BookBu
     const correction = corrections.get(d.id);
     return correction ? { ...d, characterId: correction.characterId, source: 'manual', confidence: 1 } : { ...d, characterId: remap(d.characterId) };
   });
+  if (!validIdentityGraph(merged.characters, merged.chapters)) throw new Error('人物身份合并存在循环或冲突，本机记录保留，请手动复核。');
   return merged;
 }
 /** The server adds JSONB formatting overhead; 30 MiB leaves headroom below its 40,000,000-byte constraint. */
@@ -368,12 +389,12 @@ export function validateBundle(value: unknown, id: string): asserts value is Boo
     return chapter && integer(row.paragraphIndex) && row.paragraphIndex < chapter.paragraphs.length;
   };
   const characterIds = new Set(b.characters.map(c => c.id));
-  if (b.characters.some(c => !text(c.name, 300) || !Array.isArray(c.aliases) || c.aliases.length > 300 || c.aliases.some(a => !text(a, 300)))) throw new Error('云端人物数据无效。');
+  if (b.characters.some(c => !text(c.name, 300) || !Array.isArray(c.aliases) || c.aliases.length > 300 || c.aliases.some(a => !text(a, 300)) || !validCharacterIdentity(c.identity)) || !validIdentityGraph(b.characters, b.chapters)) throw new Error('云端人物数据无效。');
   if (b.progress && (b.progress.bookId !== id || !location(b.progress) || !integer(b.progress.offset) || b.progress.offset > chapters.get(b.progress.chapterId)!.paragraphs[b.progress.paragraphIndex].length || !integer(b.progress.updatedAt) || !integer(b.progress.version))) throw new Error('云端进度无效。');
   if (b.bookmarks.some(m => !location(m) || !text(m.label, 2000) || !integer(m.createdAt))) throw new Error('云端书签无效。');
   for (const d of b.dialogues) {
     const paragraph = chapters.get(d.chapterId)?.paragraphs[d.paragraphIndex];
-    if (!location(d) || !integer(d.start) || !integer(d.end) || d.start >= d.end || d.end > paragraph!.length || paragraph!.slice(d.start, d.end) !== d.text || !Number.isFinite(d.confidence) || d.confidence < 0 || d.confidence > 1 || !['ai', 'manual'].includes(d.source) || !integer(d.updatedAt) || !(d.characterId === null || characterIds.has(d.characterId)) || (d.model !== undefined && !text(d.model, 100))) throw new Error('云端对白位置或来源无效。');
+    if (!location(d) || !integer(d.start) || !integer(d.end) || d.start >= d.end || d.end > paragraph!.length || paragraph!.slice(d.start, d.end) !== d.text || !Number.isFinite(d.confidence) || d.confidence < 0 || d.confidence > 1 || !['ai', 'manual'].includes(d.source) || !integer(d.updatedAt) || !(d.characterId === null || characterIds.has(d.characterId)) || (d.model !== undefined && !text(d.model, 100)) || (d.speakerLabel !== undefined && !text(d.speakerLabel, 80))) throw new Error('云端对白位置或来源无效。');
   }
   const dialogueIds = new Set(b.dialogues.map(d => d.id));
   if (b.corrections.some(c => !dialogueIds.has(c.dialogueId) || !(c.characterId === null || characterIds.has(c.characterId)) || !integer(c.updatedAt))) throw new Error('云端纠错数据无效。');
@@ -640,10 +661,14 @@ async function performSync(): Promise<SyncResult> {
       let chosen = local;
       const localChanged = !link || !equal(local, link.snapshot);
       if (row && (!link || row.revision !== link.revision)) {
-        if (!localChanged) {
+        const protectIdentity = !row.payload.book.deletedAt && local.characters.some(character => character.identity);
+        if (!localChanged && !protectIdentity) {
           await applyBundle(row.payload, context, row.revision, local); result.downloaded++; remote.delete(book.id); continue;
         }
         chosen = mergeBundles(local, row.payload, link?.snapshot || { ...local, bookmarks: [], characters: [], dialogues: [], corrections: [], jobs: [] });
+        if (!localChanged && equal(chosen, row.payload)) {
+          await applyBundle(row.payload, context, row.revision, local); result.downloaded++; remote.delete(book.id); continue;
+        }
         result.conflicts++;
       }
       let missingRemoteFile = false;

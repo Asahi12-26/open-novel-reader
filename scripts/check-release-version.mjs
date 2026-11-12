@@ -12,7 +12,7 @@ const versions = [manifest.version, lock.version, lock.packages?.['']?.version, 
 if (!versions.every(value => value === manifest.version)) throw new Error('package, npm lock, Tauri, Cargo and Cargo lock release versions must match.');
 if (tauri.identifier !== 'io.github.opennovelreader.app') throw new Error('Changing the released application id breaks upgrades.');
 // Advance this baseline when preparing a new release after the current Beta.
-const lastPublishedAndroidCode = 2001; // v0.2.0-beta.1, signed with the persistent release key.
+const lastPublishedAndroidCode = 3001; // v0.3.0-beta.1, signed with the persistent release key.
 if (!Number.isInteger(tauri.bundle.android.versionCode) || tauri.bundle.android.versionCode <= lastPublishedAndroidCode) throw new Error(`Android release versionCode must exceed the last published code ${lastPublishedAndroidCode}. Increment it for every subsequent published version.`);
 if (process.env.GITHUB_REF_TYPE === 'tag' && process.env.GITHUB_REF_NAME !== `v${manifest.version}`) throw new Error('Git tag must match the release version.');
 console.log(`Consistent release version: ${manifest.version}; Android code ${tauri.bundle.android.versionCode}.`);

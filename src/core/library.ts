@@ -1,6 +1,7 @@
 import type { AnalysisJob, Book, BookFile, Bookmark, Bookshelf, Chapter, Character, CharacterCorrection, Dialogue, ReadingProgress } from '../types';
 import { db } from './db';
 import { MAX_FILE_BYTES, parseEpub, parseTxt } from './parser';
+import { mergeCharacterIdentity, validCharacterIdentity, validIdentityGraph } from '../services/character-identity';
 
 const palette = ['#355e56', '#9e674d', '#4c5978', '#a58a52', '#6d526d', '#627a8e'];
 
@@ -140,8 +141,9 @@ function validateBackup(value: unknown): Backup {
   for (const row of backup.progress) if (!object(row) || !locationValid(row) || !num(row.offset) || !num(row.updatedAt) || !num(row.version)) invalid();
   for (const row of backup.bookmarks) if (!object(row) || !id(row.id) || !locationValid(row) || !str(row.label, 2000) || !num(row.createdAt)) invalid();
   for (const row of backup.shelves) if (!object(row) || !id(row.id) || !str(row.name, 200) || !num(row.updatedAt) || (row.deletedAt !== undefined && !num(row.deletedAt))) invalid();
-  for (const row of backup.characters) if (!object(row) || !id(row.id) || !bookIds.has(row.bookId) || !str(row.name, 300) || !Array.isArray(row.aliases) || row.aliases.some(name => !str(name, 300))) invalid();
-  for (const row of backup.dialogues) if (!object(row) || !id(row.id) || !locationValid(row) || !num(row.start) || !num(row.end) || row.end < row.start || row.end > chapterById.get(row.chapterId)!.paragraphs[row.paragraphIndex].length || !str(row.text, 100000) || !(row.characterId === null || id(row.characterId)) || !num(row.confidence) || row.confidence > 1 || !['ai', 'manual'].includes(row.source) || !num(row.updatedAt)) invalid();
+  for (const row of backup.characters) if (!object(row) || !id(row.id) || !bookIds.has(row.bookId) || !str(row.name, 300) || !Array.isArray(row.aliases) || row.aliases.some(name => !str(name, 300)) || !validCharacterIdentity(row.identity)) invalid();
+  if (new Set(backup.characters.map(row => row.id)).size !== backup.characters.length || !validIdentityGraph(backup.characters, backup.chapters)) invalid();
+  for (const row of backup.dialogues) if (!object(row) || !id(row.id) || !locationValid(row) || !num(row.start) || !num(row.end) || row.end < row.start || row.end > chapterById.get(row.chapterId)!.paragraphs[row.paragraphIndex].length || !str(row.text, 100000) || !(row.characterId === null || id(row.characterId)) || !num(row.confidence) || row.confidence > 1 || !['ai', 'manual'].includes(row.source) || !num(row.updatedAt) || (row.speakerLabel !== undefined && !str(row.speakerLabel, 80))) invalid();
   for (const row of backup.corrections) if (!object(row) || !id(row.id) || !id(row.dialogueId) || !bookIds.has(row.bookId) || !(row.characterId === null || id(row.characterId)) || !num(row.updatedAt)) invalid();
   for (const row of backup.jobs) if (!object(row) || !id(row.id) || !bookIds.has(row.bookId) || !chapterIds.has(row.chapterId) || !['queued', 'running', 'paused', 'done', 'failed', 'cancelled'].includes(row.status) || !num(row.completedChunks) || !num(row.totalChunks) || !num(row.updatedAt)) invalid();
   backup.settings = backup.settings.filter(row => {
@@ -181,7 +183,24 @@ export async function restoreBackup(file: File): Promise<void> {
       const current = await db.shelves.get(shelf.id);
       if (!current || current.updatedAt <= shelf.updatedAt) await db.shelves.put(shelf);
     }
-    for (const character of backup.characters) if (!(await db.characters.get(character.id))) await db.characters.put(character);
+    if (backup.characters.length) {
+      const affectedBookIds = [...new Set(backup.characters.map(character => character.bookId))];
+      const [existingRows, currentRows, chapters] = await Promise.all([
+        db.characters.where('bookId').anyOf(affectedBookIds).toArray(),
+        db.characters.bulkGet(backup.characters.map(character => character.id)),
+        db.chapters.where('bookId').anyOf(affectedBookIds).toArray(),
+      ]);
+      const mergedCharacters = new Map(existingRows.map(character => [character.id, character]));
+      const changed = backup.characters.map((character, index) => {
+        const current = currentRows[index];
+        if (current && current.bookId !== character.bookId) invalid();
+        const merged = current ? mergeCharacterIdentity(current, character) : character;
+        mergedCharacters.set(merged.id, merged);
+        return merged;
+      });
+      if (!validIdentityGraph([...mergedCharacters.values()], chapters)) invalid();
+      await db.characters.bulkPut(changed);
+    }
     for (const dialogue of backup.dialogues) {
       const current = await db.dialogues.get(dialogue.id);
       if (!current || (current.updatedAt <= dialogue.updatedAt && !(current.source === 'manual' && dialogue.source === 'ai'))) await db.dialogues.put(dialogue);

@@ -14,6 +14,7 @@ vi.mock('@supabase/supabase-js', () => ({ createClient: (_url: string, _key: str
 import { db, ReaderDatabase } from '../core/db';
 import { importBook, listChapters, saveProgress, deleteBook, exportBackup, restoreBackup } from '../core/library';
 import { CLOUD_BUNDLE_MAX_BYTES, CLOUD_FILE_MAX_BYTES, configureCloud, filterBooksForAccount, prepareLocalBookForAccount, prepareLocalProfileForAccount, setBookCloud, syncLibrary } from './cloud';
+import { initializeCharacterIdentity, manualAddAlias } from './character-identity';
 import { defaultPreferences } from '../types';
 
 interface TransportRow { id: string; payload: BookBundle; revision: number }
@@ -146,6 +147,40 @@ describe('two-device client synchronization with an offline transport', () => {
     expect(await db.progress.get(book.id)).toMatchObject({ paragraphIndex: 1, offset: 2 });
     expect((await db.bookmarks.get('remote-bookmark'))?.label).toBe('另一台设备的书签');
     expect(transport.rows().get(book.id)?.payload.bookmarks.map(b => b.id)).toContain('remote-bookmark');
+  });
+  it('preserves identity history on an otherwise unchanged device receiving a legacy upload', async () => {
+    const book = await consentAndUpload();
+    const at = { chapterIndex: 0, paragraphIndex: 0, offset: 0 };
+    const original = initializeCharacterIdentity({ id: 'rain', bookId: book.id, name: '小雨', aliases: [] }, at);
+    await db.characters.put(original);
+    await manualAddAlias(original.id, '归人', { ...at, chapterIndex: 1 });
+    await syncLibrary();
+
+    const cloud = transport.rows().get(book.id)!;
+    const legacy = { id: original.id, bookId: book.id, name: '小雨', aliases: ['旧版改名'] };
+    transport.rows().set(book.id, { ...cloud, revision: cloud.revision + 1, payload: { ...cloud.payload, characters: [legacy] } });
+    await syncLibrary();
+    const recovered = (await db.characters.get(original.id))!;
+    expect(recovered.identity?.events).toMatchObject([{ source: 'manual', kind: 'alias', value: '归人' }]);
+    expect(recovered.aliases).toContain('旧版改名');
+    expect(transport.rows().get(book.id)?.payload.characters).toEqual([recovered]);
+
+    const next = transport.rows().get(book.id)!;
+    transport.rows().set(book.id, { ...next, revision: next.revision + 1, payload: { ...next.payload, characters: [] } });
+    await expect(syncLibrary()).rejects.toThrow('本机记录已保留');
+    expect(await db.characters.get(original.id)).toEqual(recovered);
+  });
+  it('keeps new local identity history when a legacy device removes the same person', async () => {
+    const book = await consentAndUpload();
+    const legacy = { id: 'rain', bookId: book.id, name: '小雨', aliases: [] };
+    await db.characters.put(legacy);
+    await syncLibrary();
+    const recorded = initializeCharacterIdentity(legacy, { chapterIndex: 0, paragraphIndex: 0, offset: 0 });
+    await db.characters.put(recorded);
+    const cloud = transport.rows().get(book.id)!;
+    transport.rows().set(book.id, { ...cloud, revision: cloud.revision + 1, payload: { ...cloud.payload, characters: [] } });
+    await expect(syncLibrary()).rejects.toThrow('本机记录已保留');
+    expect(await db.characters.get(legacy.id)).toEqual(recorded);
   });
   it('keeps an opted-out device local until re-enabled, then propagates a remote tombstone', async () => {
     const book = await consentAndUpload();

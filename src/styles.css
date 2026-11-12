@@ -26,3 +26,14 @@
 .reader{top:var(--safe-top);right:var(--safe-right);left:var(--safe-left)}
 .modal-backdrop{inset:var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left)}
 .mobile-nav{left:var(--safe-left);right:var(--safe-right)}
+
+/* Whole-book analysis reuses the reader surfaces; minimized tasks leave reading available. */
+.analysis-mode-switch{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.book-analysis-dock{position:absolute;right:16px;bottom:calc(76px + var(--safe-bottom));z-index:9;display:flex;align-items:center;gap:12px;max-width:calc(100% - 32px);padding:13px 15px;background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:0 6px 24px #17251d14}
+.book-analysis-dock>div{display:grid;gap:4px;font-size:12px}.book-analysis-dock small{font-size:10px;color:var(--muted)}
+.book-analysis-chapters{max-height:220px;overflow:auto;padding-left:22px}.book-analysis-chapters li{padding:6px 0}.book-analysis-chapters small{display:block;color:var(--muted);margin-top:4px}
+.job-status details{font-size:12px;margin-top:12px}.job-status summary,.identity-history summary{cursor:pointer}
+.character-alias-form,.identity-history{grid-column:1/-1}.character-alias-form{margin-top:0}.character-alias-form input{width:auto;min-width:0;flex:1}
+.known-aliases{display:flex;flex-wrap:wrap;gap:5px;align-items:center}.known-aliases>span{font-size:11px;background:var(--paper);padding:3px 6px;border-radius:4px}.known-aliases .text-button{padding:0 0 0 5px}
+.identity-history{font-size:11px;color:var(--muted)}.identity-history ul{padding-left:18px;margin:10px 0 0}.identity-history li{margin:7px 0}.identity-history small{display:block;line-height:1.7}
+@media(max-width:650px){.book-analysis-dock{right:10px;left:10px;bottom:calc(70px + var(--safe-bottom));max-width:none;padding:10px;gap:8px}.book-analysis-dock>div{flex:1;font-size:10px}.book-analysis-dock .secondary{padding:8px;font-size:10px}.book-analysis-dock small{font-size:9px}.character-manager .character-alias-form input{width:auto;min-width:0}}

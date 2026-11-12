@@ -49,8 +49,8 @@ export default function Settings({ preferences, onPreferences, onClose, initialT
         </div>
       </form>
       <h3>由你决定每一次分析</h3>
-      <p className="muted">阅读时打开「人物识别」，选择章节、查看费用估计、设置累计额度并授权开始。结果自动保存，可在正文纠正人物；中断后可从已完成进度继续，每次继续或重试都需重新授权。</p>
-      <p className="muted">只有「授权并分析」会调用收费生成接口。选中对白、邻近上下文和已有名称会经 HTTPS 发送至当前 Supabase 代理，再转发给 DeepSeek。代理不保存密钥，不自动重试。估算按公开峰值价格预留，不能替代供应商账单。</p>
+      <p className="muted">阅读时打开「人物识别」，可保留逐章分析，或选择整书分析。整书任务一次授权后可在固定总预算内自动推进；阅读进度模式仅分析已读内容，可在本次活动会话内随阅读继续。关闭会话或重启后，需重新载入密钥并授权续跑。</p>
+      <p className="muted">只有明确授权的分析会调用收费生成接口。对白、必要上下文和人物身份的上下文证据会经 HTTPS 发送至当前 Supabase 代理，再转发给 DeepSeek。密钥不保存，异常请求不自动重试；任务累计预留包含失败与重试，估算不能替代供应商账单。人工纠正优先保留，未来身份信息默认隐藏。</p>
       <a className="inline-link" href="https://platform.deepseek.com/api_keys" target="_blank" rel="noreferrer">在 DeepSeek 管理 API Key ↗</a>
     </div>}
   </Modal>;

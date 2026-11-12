@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDeepseekProxy, type ProxyDependencies } from '../../supabase/functions/deepseek-proxy/handler';
-import { AI_MODELS, AI_SYSTEM_PROMPT } from '../../supabase/functions/_shared/ai-contract';
+import { AI_BOOK_SYSTEM_PROMPT, AI_MODELS, AI_SYSTEM_PROMPT } from '../../supabase/functions/_shared/ai-contract';
 
 // Only the dependency-injected handler is imported: Deno.serve and real provider fetch never run.
 const ORIGIN = 'https://asahi12-26.github.io';
@@ -47,7 +47,7 @@ describe('DeepSeek proxy auth and origin boundary (offline only)', () => {
   it('checks authenticated readiness without a provider key or network request', async () => {
     const { handler, upstream, authenticate } = fixture();
     const response = await handler(request({ action: 'status' }));
-    expect(await response.json()).toEqual({ ready: true, models: AI_MODELS.map(model => model.id), limits: { maxTokens: 4096, maxRequestCostUsd: 0.10 }, upstreamChecked: false });
+    expect(await response.json()).toEqual({ ready: true, models: AI_MODELS.map(model => model.id), limits: { maxTokens: 4096, maxRequestCostUsd: 0.10 }, upstreamChecked: false, protocols: ['identity-v1'] });
     expect(authenticate).toHaveBeenCalledWith('fixture-user-jwt', expect.any(AbortSignal)); expect(upstream).not.toHaveBeenCalled();
   });
   it('sanitizes auth outages and rejects non-JSON/methods without provider calls', async () => {
@@ -57,6 +57,87 @@ describe('DeepSeek proxy auth and origin boundary (offline only)', () => {
     expect((await handler(new Request('https://example.invalid', { headers: { origin: ORIGIN } }))).status).toBe(405);
     expect((await handler(request({}, { 'content-type': 'text/plain' }))).status).toBe(415);
     expect(upstream).not.toHaveBeenCalled();
+  });
+});
+
+describe('identity-v1 deep analysis protocol (fake upstream only)', () => {
+  const person = { id: 'fixture-person', name: '小林', aliases: [] as string[] };
+  const reveal = '小林也叫林同学。';
+  const paragraph = reveal + '小林说：“你好。”';
+  const start = paragraph.indexOf(candidate.text);
+  const dialogue = { ...candidate, start, end: start + candidate.text.length };
+  const payload = () => ({ chapter: '第一章', known: [{ ...person }], context: [{ paragraph: 0, start: 0, text: paragraph }], dialogues: [{ ...dialogue }] });
+  const deep = () => ({ ...analysis(), protocol: 'identity-v1', system: AI_BOOK_SYSTEM_PROMPT, input: payload() });
+  const reply = () => ({
+    dialogues: [{ id: dialogue.id, speaker: '小林', characterId: person.id, confidence: 0.96 }],
+    identities: [{ characterId: person.id, kind: 'alias', value: '林同学', evidence: { paragraphIndex: 0, start: 0, end: reveal.length, text: reveal }, confidence: 0.98 }],
+  });
+  const upstreamReply = (result: unknown) => new Response(JSON.stringify(answer({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(result) } }] })));
+
+  it('accepts structured identity evidence with the fixed book prompt and keeps V0.3 requests working', async () => {
+    const upstream = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const sent = JSON.parse(String(init?.body));
+      return sent.messages[0].content === AI_BOOK_SYSTEM_PROMPT ? upstreamReply(reply()) : new Response(JSON.stringify(answer()));
+    });
+    const { handler } = fixture({ fetch: upstream as typeof fetch });
+    const prior = await handler(request(analysis()));
+    expect(prior.status).toBe(200);
+    const legacy = await prior.json();
+    expect(JSON.parse(legacy.choices[0].message.content)).toEqual({ dialogues: [{ id: candidate.id, speaker: '小林', confidence: 0.9 }] });
+
+    const response = await handler(request(deep()));
+    expect(response.status).toBe(200);
+    expect(upstream).toHaveBeenCalledTimes(2);
+    const [url, init] = upstream.mock.calls[1];
+    expect(url).toBe('https://api.deepseek.com/chat/completions');
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      model: 'deepseek-flash', max_tokens: 4096, thinking: { type: 'disabled' }, response_format: { type: 'json_object' },
+      messages: [{ role: 'system', content: AI_BOOK_SYSTEM_PROMPT }, { role: 'user', content: JSON.stringify(payload()) }],
+    });
+    expect(JSON.parse((await response.json()).choices[0].message.content)).toEqual(reply());
+  });
+
+  it('rejects invalid protocol, consent, bounds and ambiguous known IDs before any upstream call', async () => {
+    const { handler, upstream } = fixture();
+    const invalid = [
+      { ...deep(), protocol: 'unknown' },
+      { ...deep(), authorized: false },
+      { ...deep(), system: AI_SYSTEM_PROMPT },
+      { ...deep(), maxCostUsd: 0.00001 },
+      { ...deep(), input: { ...payload(), known: [{ name: person.name, aliases: [] }] } },
+      { ...deep(), input: { ...payload(), known: [person, { ...person, name: '另一人' }] } },
+      { ...deep(), input: { ...payload(), known: [{ ...person, rawHistory: 'not permitted' }] } },
+      { ...deep(), input: { ...payload(), context: [{ paragraph: 0, start: -1, text: paragraph }] } },
+      { ...deep(), input: { ...payload(), context: [{ paragraph: 0, text: paragraph }] } },
+      { ...deep(), input: { ...payload(), dialogues: [{ ...dialogue, voice: 'not permitted' }] } },
+    ];
+    for (const body of invalid) {
+      const response = await handler(request(body));
+      expect(response.status, JSON.stringify(body.input)).toBe(body.authorized === false ? 403 : 400);
+    }
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed identity responses without returning provider internals or retrying', async () => {
+    const result = reply();
+    const invalid = [
+      { ...result, dialogues: [] },
+      { ...result, dialogues: [{ ...result.dialogues[0], characterId: 'not-sent' }] },
+      { ...result, dialogues: [{ ...result.dialogues[0], id: 'not-sent' }] },
+      { ...result, dialogues: [{ id: dialogue.id, speaker: '小林', confidence: 0.96 }] },
+      { ...result, dialogues: [{ ...result.dialogues[0], aside: 'not permitted' }] },
+      { ...result, identities: [{ ...result.identities[0], targetId: person.id }] },
+      { ...result, identities: [{ ...result.identities[0], evidence: { ...result.identities[0].evidence, end: 0 } }] },
+      { ...result, identities: [{ ...result.identities[0], evidence: { ...result.identities[0].evidence, text: '错'.repeat(reveal.length) } }] },
+    ];
+    for (const value of invalid) {
+      const upstream = vi.fn(async () => upstreamReply(value));
+      const { handler } = fixture({ fetch: upstream as typeof fetch });
+      const response = await handler(request(deep()));
+      expect(response.status, JSON.stringify(value)).toBe(502);
+      expect(await response.json()).toEqual({ error: 'INVALID_UPSTREAM_RESPONSE' });
+      expect(upstream).toHaveBeenCalledOnce();
+    }
   });
 });
 

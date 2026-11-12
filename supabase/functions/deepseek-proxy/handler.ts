@@ -1,5 +1,5 @@
 import { readBoundedJSON } from '../_shared/bounded-request.ts';
-import { AI_COST_MARGIN, AI_MODELS, AI_OUTPUT_LIMIT, AI_SYSTEM_PROMPT, AI_TOKEN_OVERHEAD, MAX_AI_REQUEST_COST_USD } from '../_shared/ai-contract.ts';
+import { AI_COST_MARGIN, AI_MODELS, AI_OUTPUT_LIMIT, AI_SYSTEM_PROMPT, AI_BOOK_SYSTEM_PROMPT, AI_TOKEN_OVERHEAD, MAX_AI_REQUEST_COST_USD } from '../_shared/ai-contract.ts';
 
 export const DEFAULT_AI_ORIGINS = [
   'https://asahi12-26.github.io', 'https://tauri.localhost', 'http://tauri.localhost', 'tauri://localhost',
@@ -10,6 +10,11 @@ const MAX_BODY_BYTES = 160000;
 const MAX_INPUT_BYTES = 100000;
 const MAX_RESPONSE_BYTES = 131072;
 type JsonObject = Record<string, unknown>;
+type IdentityInput = {
+  known: { id: string }[];
+  context: { paragraph: number; start: number; text: string }[];
+  dialogues: { id: string }[];
+};
 export interface ProxyDependencies {
   /** Return a verified non-anonymous user id, never decoded-but-unverified JWT claims. */
   authenticate(token: string, signal: AbortSignal): Promise<string | null>;
@@ -22,13 +27,14 @@ const cleanText = (value: unknown, max: number): value is string => typeof value
 const integer = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 const only = (value: JsonObject, keys: readonly string[]) => Object.keys(value).every(key => keys.includes(key));
 
-function validInput(value: unknown): value is JsonObject {
+function validInput(value: unknown, deep = false): value is JsonObject {
   if (!object(value) || !only(value, ['chapter', 'known', 'context', 'dialogues']) || !cleanText(value.chapter, 500)) return false;
-  if (!Array.isArray(value.known) || value.known.length > 100 || !value.known.every(row => object(row) && only(row, ['name', 'aliases']) && cleanText(row.name, 80) && Array.isArray(row.aliases) && row.aliases.length <= 20 && row.aliases.every(alias => cleanText(alias, 80)))) return false;
+  if (!Array.isArray(value.known) || value.known.length > 100 || !value.known.every(row => object(row) && only(row, deep ? ['id', 'name', 'aliases'] : ['name', 'aliases']) && (!deep || cleanText(row.id, 512)) && cleanText(row.name, 80) && Array.isArray(row.aliases) && row.aliases.length <= 20 && row.aliases.every(alias => cleanText(alias, 80)))) return false;
+  if (deep && new Set(value.known.map(row => row.id)).size !== value.known.length) return false;
   if (!Array.isArray(value.context) || !value.context.length || value.context.length > 36) return false;
   const paragraphs = new Set<number>();
   for (const row of value.context) {
-    if (!object(row) || !only(row, ['paragraph', 'text']) || !integer(row.paragraph) || paragraphs.has(row.paragraph) || !cleanText(row.text, 7000)) return false;
+    if (!object(row) || !only(row, deep ? ['paragraph', 'text', 'start'] : ['paragraph', 'text']) || (deep && !integer(row.start)) || !integer(row.paragraph) || paragraphs.has(row.paragraph) || !cleanText(row.text, 7000)) return false;
     paragraphs.add(row.paragraph);
   }
   if (!Array.isArray(value.dialogues) || !value.dialogues.length || value.dialogues.length > 12) return false;
@@ -40,7 +46,7 @@ function validInput(value: unknown): value is JsonObject {
   return true;
 }
 
-function analysisResponse(value: unknown): JsonObject | null {
+function analysisResponse(value: unknown, input?: IdentityInput): JsonObject | null {
   if (!object(value) || !Array.isArray(value.choices) || value.choices.length !== 1) return null;
   const choice = value.choices[0];
   if (!object(choice) || !['stop', 'length', 'content_filter'].includes(String(choice.finish_reason)) || !object(choice.message) || typeof choice.message.content !== 'string' || choice.message.content.length > 65536) return null;
@@ -48,10 +54,25 @@ function analysisResponse(value: unknown): JsonObject | null {
     let parsed: unknown;
     try { parsed = JSON.parse(choice.message.content); } catch { return null; }
     if (!object(parsed) || !Array.isArray(parsed.dialogues) || parsed.dialogues.length > 12) return null;
+    const knownIds = new Set(input?.known.map(row => row.id));
+    const requestedIds = new Set(input?.dialogues.map(row => row.id));
+    if (input && (!only(parsed, ['dialogues', 'identities']) || parsed.dialogues.length !== requestedIds.size)) return null;
     const ids = new Set<string>();
     for (const row of parsed.dialogues) {
       if (!object(row) || !cleanText(row.id, 512) || ids.has(row.id) || (row.speaker !== null && !cleanText(row.speaker, 80)) || typeof row.confidence !== 'number' || !Number.isFinite(row.confidence) || row.confidence < 0 || row.confidence > 1) return null;
       ids.add(row.id);
+      if (input && (!only(row, ['id', 'speaker', 'characterId', 'confidence']) || !requestedIds.has(row.id) || (row.characterId !== null && (typeof row.characterId !== 'string' || !knownIds.has(row.characterId))))) return null;
+    }
+    if (input) {
+      if (!Array.isArray(parsed.identities) || parsed.identities.length > 12) return null;
+      for (const proposal of parsed.identities) {
+        if (!object(proposal) || !only(proposal, ['characterId', 'kind', 'value', 'targetId', 'evidence', 'confidence']) || !cleanText(proposal.characterId, 512) || !knownIds.has(proposal.characterId) || !['alias', 'merge'].includes(String(proposal.kind)) || typeof proposal.confidence !== 'number' || !Number.isFinite(proposal.confidence) || proposal.confidence < 0 || proposal.confidence > 1) return null;
+        if (proposal.kind === 'alias' ? !cleanText(proposal.value, 80) || proposal.targetId !== undefined : !cleanText(proposal.targetId, 512) || !knownIds.has(proposal.targetId) || proposal.value !== undefined) return null;
+        const evidence = proposal.evidence;
+        if (!object(evidence) || !only(evidence, ['paragraphIndex', 'start', 'end', 'text']) || !integer(evidence.paragraphIndex) || !integer(evidence.start) || !integer(evidence.end) || !cleanText(evidence.text, 1200) || evidence.end - evidence.start !== evidence.text.length) return null;
+        const context = input.context.find(row => row.paragraph === evidence.paragraphIndex);
+        if (!context || evidence.start < context.start || context.text.slice(evidence.start - context.start, evidence.end - context.start) !== evidence.text) return null;
+      }
     }
   }
   const result: JsonObject = { choices: [{ finish_reason: choice.finish_reason, message: { content: choice.message.content } }] };
@@ -104,20 +125,22 @@ export function createDeepseekProxy(deps: ProxyDependencies): (request: Request)
       if (!['status', 'models', 'analyze'].includes(String(body.action))) return reply({ error: 'INVALID_ACTION' }, 400);
       if (body.action === 'status') {
         if (!only(body, ['action'])) return reply({ error: 'INVALID_STATUS' }, 400);
-        return reply({ ready: true, models: AI_MODELS.map(model => model.id), limits: { maxTokens: AI_OUTPUT_LIMIT, maxRequestCostUsd: MAX_AI_REQUEST_COST_USD }, upstreamChecked: false });
+        return reply({ ready: true, models: AI_MODELS.map(model => model.id), limits: { maxTokens: AI_OUTPUT_LIMIT, maxRequestCostUsd: MAX_AI_REQUEST_COST_USD }, upstreamChecked: false, protocols: ['identity-v1'] });
       }
       if (typeof body.apiKey !== 'string' || !/^[A-Za-z0-9._-]{10,256}$/.test(body.apiKey)) return reply({ error: 'INVALID_KEY' }, 400);
       let upstreamBody: string | undefined;
       if (body.action === 'analyze') {
         if (body.authorized !== true) return reply({ error: 'CONSENT_REQUIRED' }, 403);
-        if (!only(body, ['action', 'apiKey', 'authorized', 'model', 'maxTokens', 'system', 'input', 'maxCostUsd'])) return reply({ error: 'INVALID_ANALYSIS' }, 400);
+        if (!only(body, ['action', 'apiKey', 'authorized', 'model', 'maxTokens', 'system', 'input', 'maxCostUsd', 'protocol']) || (body.protocol !== undefined && body.protocol !== 'identity-v1')) return reply({ error: 'INVALID_ANALYSIS' }, 400);
+        const deep = body.protocol === 'identity-v1';
+        const system = deep ? AI_BOOK_SYSTEM_PROMPT : AI_SYSTEM_PROMPT;
         const model = AI_MODELS.find(model => model.id === body!.model);
-        if (!model || typeof body.maxTokens !== 'number' || !Number.isInteger(body.maxTokens) || body.maxTokens < 1 || body.maxTokens > AI_OUTPUT_LIMIT || body.system !== AI_SYSTEM_PROMPT || !validInput(body.input)) return reply({ error: 'INVALID_ANALYSIS' }, 400);
+        if (!model || typeof body.maxTokens !== 'number' || !Number.isInteger(body.maxTokens) || body.maxTokens < 1 || body.maxTokens > AI_OUTPUT_LIMIT || body.system !== system || !validInput(body.input, deep)) return reply({ error: 'INVALID_ANALYSIS' }, 400);
         const input = JSON.stringify(body.input);
-        const inputBytes = encoder.encode(AI_SYSTEM_PROMPT + input).length + AI_TOKEN_OVERHEAD;
+        const inputBytes = encoder.encode(system + input).length + AI_TOKEN_OVERHEAD;
         const upperCost = (inputBytes * model.inputPerMillion + body.maxTokens * model.outputPerMillion) / 1_000_000 * AI_COST_MARGIN;
         if (inputBytes > MAX_INPUT_BYTES || typeof body.maxCostUsd !== 'number' || !Number.isFinite(body.maxCostUsd) || body.maxCostUsd <= 0 || body.maxCostUsd > MAX_AI_REQUEST_COST_USD || upperCost > body.maxCostUsd + 0.0000001) return reply({ error: 'COST_LIMIT' }, 400);
-        upstreamBody = JSON.stringify({ model: model.id, messages: [{ role: 'system', content: AI_SYSTEM_PROMPT }, { role: 'user', content: input }],
+        upstreamBody = JSON.stringify({ model: model.id, messages: [{ role: 'system', content: system }, { role: 'user', content: input }],
           thinking: { type: 'disabled' }, response_format: { type: 'json_object' }, max_tokens: body.maxTokens, stream: false, temperature: 0.2 });
       } else if (!only(body, ['action', 'apiKey'])) return reply({ error: 'INVALID_MODELS' }, 400);
       if (controller.signal.aborted) return reply({ error: 'REQUEST_ABORTED' }, 499);
@@ -138,7 +161,7 @@ export function createDeepseekProxy(deps: ProxyDependencies): (request: Request)
       if (body.action === 'models') {
         if (!object(value) || !Array.isArray(value.data) || value.data.length > 100) return reply({ error: 'INVALID_UPSTREAM_RESPONSE' }, 502);
         result = { data: value.data.filter(model => object(model) && AI_MODELS.some(allowedModel => allowedModel.id === model.id)).map(model => ({ id: (model as JsonObject).id })) };
-      } else result = analysisResponse(value);
+      } else result = analysisResponse(value, body.protocol === 'identity-v1' ? body.input as IdentityInput : undefined);
       if (!result || JSON.stringify(result).includes(body.apiKey)) return reply({ error: 'INVALID_UPSTREAM_RESPONSE' }, 502);
       return reply(result);
     } catch { return reply({ error: controller.signal.aborted ? 'UPSTREAM_TIMEOUT_OR_NETWORK_ERROR' : 'PROXY_UNAVAILABLE' }, 504); }
