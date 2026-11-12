@@ -1,6 +1,6 @@
 import { liveQuery } from 'dexie';
 import { db } from '../core/db';
-import type { AnalysisJob, Chapter, Character, Dialogue, ReadingProgress } from '../types';
+import type { Chapter, Character, Dialogue, ReadingProgress } from '../types';
 import { getCloudConfig, getSession } from './cloud';
 import { AI_BOOK_SYSTEM_PROMPT, AI_OUTPUT_LIMIT, MAX_AI_REQUEST_COST_USD } from '../../supabase/functions/_shared/ai-contract';
 import { AIError, AI_MODELS, bookPayloadFor, chunksFor, createBoundAnalysisSession, estimateBookChunk, extractDialogues, registerBookAnalysis, saveAnalysisChunk, validateDeepAttributions, withAnalysisBookLock } from './ai';
@@ -267,8 +267,7 @@ export function analyzeBook(options: BookAnalysisOptions): BookAnalysisControlle
         if (!review) nextJob.dialogueCount += candidates.length;
         nextJob.completedReviews = nextJob.chapters.filter(item => item.reviewCompleted && item.reviewCandidateIds.length > 0).length;
         nextJob.updatedAt = Date.now();
-        const checkpoint: AnalysisJob = { id: entry.jobId, bookId: options.bookId, chapterId: entry.chapterId, status: nextEntry.status, completedChunks: nextEntry.completedChunks, totalChunks: entry.totalChunks, model: options.model, updatedAt: Date.now(), reservedUsd: nextJob.reservedUsd };
-        await saveAnalysisChunk(chapter, candidates, rows, options.model, checkpoint, assertWork, { sourceChapter: original, input, review, identities: value.identities as IdentityProposal[], commit: () => db.settings.put({ id: prefix + id, value: nextJob }).then(() => undefined) });
+        await saveAnalysisChunk(chapter, candidates, rows, options.model, undefined, assertWork, { sourceChapter: original, input, review, identities: value.identities as IdentityProposal[], commit: () => db.settings.put({ id: prefix + id, value: nextJob }).then(() => undefined) });
         job = nextJob; Object.assign(entry, nextEntry); announce();
       };
       announce();

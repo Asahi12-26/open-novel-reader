@@ -129,6 +129,7 @@ describe('whole-book analysis authorization and checkpointing (offline)', () => 
     expect(await db.dialogues.count()).toBe(1);
     const checkpoint = await getBookAnalysisJob(failed.id);
     expect(checkpoint).toEqual(failed);
+    expect(await db.jobs.count()).toBe(0);
     expect(JSON.stringify(await db.settings.toArray())).not.toContain(key);
 
     clearAIKey();

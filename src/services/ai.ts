@@ -293,7 +293,7 @@ export interface DeepChunkOptions {
   review?: boolean;
   commit?: () => Promise<void>;
 }
-export async function saveAnalysisChunk(chapter: Chapter, candidates: DialogueCandidate[], rows: ModelAttribution[], model: AIModel, checkpoint: AnalysisJob, assertLive: () => void, deep?: DeepChunkOptions) {
+export async function saveAnalysisChunk(chapter: Chapter, candidates: DialogueCandidate[], rows: ModelAttribution[], model: AIModel, checkpoint: AnalysisJob | undefined, assertLive: () => void, deep?: DeepChunkOptions) {
   // WebCrypto is completed before the IndexedDB transaction to keep it active.
   const ids = new Map(await Promise.all([...new Set(rows.flatMap(r => r.speaker ? [r.speaker] : []))].map(async name => {
     const first = candidates.find(c => rows.find(row => row.id === c.id)?.speaker === name)!;
@@ -351,7 +351,7 @@ export async function saveAnalysisChunk(chapter: Chapter, candidates: DialogueCa
     }
     assertLive();
     // A chunk and its paid-work checkpoint commit together, including manual overrides.
-    await db.jobs.put(checkpoint);
+    if (checkpoint) await db.jobs.put(checkpoint);
     if (deep?.commit) await deep.commit();
   });
 }
