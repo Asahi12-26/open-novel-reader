@@ -1,12 +1,13 @@
 # PROJECT_STATUS
 
-更新：2026-11-12 · V0.4 Beta
+更新：2026-11-13 · V0.4 Beta 2 已发布
 
 ## V0.4 整书分析
 
 - 版本 `0.4.0-beta.2`，Android versionCode `4002`。整书任务采用本机检查点和固定累计预算，分析结果沿用现有人物、对白和纠错记录。用户重启后可重新授权，从已保存分片继续。 [整书分析指南](docs/BOOK_ANALYSIS.md)
 - 离线验证覆盖跨章推进、暂停、失败与手动重试、预算预留、已读边界、防剧透和人工修改。Beta 2 修复了任务历史较晚加载时覆盖已选范围的问题。真实整书模型效果留待新授权测试。 [质量样本与验证](docs/AI_QUALITY.md)
 - 线上代理已支持整书人物协议，保留逐章请求格式。新旧客户端兼容性和预算边界通过离线回归，已核对真实代理的来源白名单与匿名拒绝。 [V0.4 Beta 2 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.4.0-beta.2)
+- 正式标签指向 `85875075ca69b16c4c6afae9f7d3d19c84be53d2`。127 项本地测试和 12 项浏览器流程通过。正式 Windows、Android 安装包及配套文件已公开下载核验，SHA256 一致，APK 沿用固定签名。V0.4 原生端尚未复测实际覆盖安装。 [标签检查](https://github.com/Asahi12-26/open-novel-reader/actions/runs/43320851791) · [原生构建](https://github.com/Asahi12-26/open-novel-reader/actions/runs/43320851753) · [Web 部署](https://github.com/Asahi12-26/open-novel-reader/actions/runs/43305345127)
 
 ## V0.3 本轮进展
 

@@ -1,6 +1,14 @@
 # 构建、安装与更新
 
-## 0.3 已发布产物（2026-11-08）
+## 0.4 Beta 2 发布产物
+
+`v0.4.0-beta.2` 指向 `85875075ca69b16c4c6afae9f7d3d19c84be53d2`，Android versionCode 为 `4002`。APK 沿用固定发布证书、应用标识与 HTTPS WebView 来源。Windows x64 安装包未配置发布者签名。 [发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.4.0-beta.2) · [SHA256 校验值](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.4.0-beta.2/SHA256SUMS.txt) · [第三方许可](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.4.0-beta.2/THIRD_PARTY_LICENSES.zip)
+
+标签原生构建与 Web 检查通过，Pages 已部署。 [原生构建](https://github.com/Asahi12-26/open-novel-reader/actions/runs/43320851753) · [Web 检查](https://github.com/Asahi12-26/open-novel-reader/actions/runs/43320851791) · [Pages 部署](https://github.com/Asahi12-26/open-novel-reader/actions/runs/43305345127)
+
+四项发布附件已下载核验，SHA256 一致。APK 固定证书、ARM64、最低 API 26 与 versionCode 4002 核验通过，Windows 安装包版本与标签一致。APK 和第三方许可包均核对了 7 项许可资源。Beta 2 原生安装包完成了文件验证，实机安装验证待补。
+
+## 历史 0.3 已发布产物（2026-11-08）
 
 版本 `0.3.0-beta.1`，Android versionCode `3001`，正式标签 `37455962d3cef1c888a860c725b09e53f76cd69e`。沿用 0.2 的固定发布证书、应用标识、HTTPS WebView origin 和 Dexie v1 数据库，不清空或重建。[标签原生构建](https://github.com/Asahi12-26/open-novel-reader/actions/runs/42361969367)、[标签 Web 检查](https://github.com/Asahi12-26/open-novel-reader/actions/runs/42361969469)及 [Pages 部署](https://github.com/Asahi12-26/open-novel-reader/actions/runs/42361941854)全部成功。
 
@@ -150,7 +158,7 @@ DPAPI credential 文件只能由本机当前用户解密，复制它不能替代
 - `Windows and Android builds`：main 和 `v*` tag 自动生成原生 artifacts；tag 成功后附加到 GitHub prerelease。
 - `Publish Web PWA`：GitHub Pages 生产部署；需要仓库启用 Pages。
 
-本轮版本为 `0.3.0-beta.1`，Android versionCode 为 `3001`（0.2 为 `2001`，0.1 为 `1001`）。将 package.json / package-lock.json、src-tauri/Cargo.toml / Cargo.lock、tauri.conf.json 版本同步更新；之后每个 Android 发布的 versionCode 必须继续递增。`node scripts/check-release-version.mjs` 在原生 CI 检查版本、tag 和稳定 app id。推送 `v0.3.0-beta.1` 一类 tag 后查看 Actions；只有成功生成的 artifact 才算原生构建完成。工作流失败时修复后再发布，不把未生成的文件列为下载。
+当前版本为 `0.4.0-beta.2`，Android versionCode 为 `4002`。发版时同步更新 package.json、package-lock.json、src-tauri/Cargo.toml、Cargo.lock 和 tauri.conf.json，并递增 Android versionCode。原生 CI 通过 `node scripts/check-release-version.mjs` 检查版本、标签和应用标识。推送对应标签后，在 Actions 确认构建成功并检查发布附件。
 
 tag 工作流将原生二进制复制成 `Open-Novel-Reader_<version>_windows-x64-setup.exe`、`Open-Novel-Reader_<version>_android-arm64.apk`，随同 `THIRD_PARTY_LICENSES.zip`、`SHA256SUMS.txt` 上传。先规范为无空格的 ASCII 下载名再生成校验值，上传后检查实际附件名称，避免 GitHub 重命名导致校验文件名不匹配。已存在的同 tag Release 只覆盖同名附件，不会因为 Release 已存在而失败。
 

@@ -3,10 +3,10 @@
 ## 选择平台
 
 - **Web / PWA：** 打开 [公开阅读器](https://asahi12-26.github.io/open-novel-reader/)，无需注册即可导入小说。首次联网打开并完成应用缓存后可离线再开；浏览器支持时可用菜单中的安装应用功能。
-- **Windows x64：** [下载 V0.3 EXE](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.3.0-beta.1/Open-Novel-Reader_0.3.0-beta.1_windows-x64-setup.exe)，运行并按向导安装。0.1 → 0.2 与候选 `41a8647` 的 0.2 → 0.3 覆盖升级已验证，保留测试书、章节位置、书签和主题；正式附件版本及摘要已核验。安装程序未做发布者签名。
-- **Android ARM64：** [下载 V0.3 APK](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.3.0-beta.1/Open-Novel-Reader_0.3.0-beta.1_android-arm64.apk)，传到手机后安装。最低 Android 8，固定发布签名，versionCode 3001；正式包验签、清单和摘要通过。候选 `41a8647` 的 0.2 → 0.3 真机覆盖升级、登录、同步、书签、重启和离线正文均通过，正式标签 APK 已完成实机覆盖安装与冷重启复核，登录、第 3 章 88% 和原 1 个书签均保留，手动同步成功。**旧 0.1 开发签名不能直接覆盖安装到 0.2 / 0.3，先在旧版导出书库并保留备份，再卸载迁移，勿直接卸载。** 0.2 起复用同一签名并递增版本号。
+- **Windows x64** 下载并运行安装向导。安装包未配置发布者签名。 [下载 Beta 2 EXE](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.4.0-beta.2/Open-Novel-Reader_0.4.0-beta.2_windows-x64-setup.exe)
+- **Android ARM64** 最低 Android 8，Beta 2 的 versionCode 为 4002。0.2 起的正式签名版可覆盖升级。仍在使用 0.1 开发签名版时，先导出并保留书库备份，再卸载、安装新版并恢复。 [下载 Beta 2 APK](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.4.0-beta.2/Open-Novel-Reader_0.4.0-beta.2_android-arm64.apk)
 
-[V0.3 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.3.0-beta.1)四项附件已实际下载核验，摘要与 [SHA256SUMS.txt](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.3.0-beta.1/SHA256SUMS.txt)一致；[V0.2](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.2.0-beta.1)保留为历史版本。Web 已部署 V0.3；Web、Windows、Android 的本机书库分别保存，登录同一账号并明确允许上传后才会通过云端同步。
+Web、Windows 与 Android 的本机书库分别保存。登录同一账号并逐本允许上传后，可通过云端同步。 [Beta 2 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.4.0-beta.2) · [下载校验值](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.4.0-beta.2/SHA256SUMS.txt) · [历史升级验证](../PROJECT_STATUS.md)
 
 ## 导入与阅读
 
@@ -33,8 +33,8 @@ TXT 支持 UTF-8、GB18030 和带 BOM 的 UTF-16。EPUB 目前按文字阅读，
 
 AI 使用已配置的 Supabase 代理、已登录账号和自己的 DeepSeek API Key。本人测试项目的代理已部署。在「AI 模型」先点「检查代理（不调用模型）」即可验证登录和代理，无需密钥、不会访问 DeepSeek。之后自行载入密钥，可选择「测试连接（仅查询模型）」。密钥只放本次会话内存，刷新、退出或切换账号后需重新输入，不会写入备份或同步记录。不要把密钥发到聊天。
 
-阅读时打开「人物识别」，选择要分析的章节和模型、查看费用估计并设置累计预算，勾选本次付费授权后点击开始。任务自动提取对白、判断归属并保存，面板显示分片进度、错误及结果，可进入正文查看与纠正。人物管理支持新建、改名与合并，人工纠正优先保留。
+阅读时打开「章节人物识别」。可选择逐章分析，也可打开「整书分析」，选择阅读进度模式或整本书深度模式。核对请求量、费用估算和固定总预算后勾选授权，任务便会逐段识别对白、保存结果。阅读进度模式仅处理已读内容，收起面板后可随阅读继续。全书结果在阅读页默认按当前阅读位置隐藏剧透。人物管理支持新建、改名与合并，人工纠正优先。
 
-暂停在当前分片后生效，关闭面板会取消在途请求。失败或重启后已完成分片保留，须重新勾选授权再点「从上次进度继续」；不会自动发起收费重试。失败 / 取消的请求仍可能计费，其预留额度不会自动返还。换设备导入的检查点缺少本机预算记录时应新建任务，已有结果仍保留。当前只分析所选章节，不后台分析整本书。
+暂停在当前分片后生效，关闭面板会结束当前会话。失败或重启后，已完成分片保留。重启后先载入会话密钥，再重新授权继续原任务。失败和取消的请求仍可能计费，已预留额度计入累计预算。整书任务和预算记录保存在本机，换设备可同步已授权书籍的人物结果。 [整书分析指南](BOOK_ANALYSIS.md)
 
-真实 Supabase 双账号隔离、三浏览器同步、断网恢复及本人确认邮件已通过。主线候选 `41a8647` 的 95 项单元 / 离线测试、11 项浏览器流程及 Windows / Android CI 构建全部通过。Windows 隔离书库 0.2 → 0.3 覆盖安装返回 0，保留 1 本测试书、第三章 41%、1 个书签与暖笺主题。候选 Android APK 真机覆盖升级保留原登录、书库和第三章 88%，书签、冷重启、完全断网正文、恢复联网同步和非收费代理检查均通过，网络已原样恢复。 原创短章 Flash 真实推理最小验证通过：完成 1/1 分片，3 句对白全部归属到 2 名人物，0 未知，1 处人工确认重新打开后仍保存。测试结束已清除会话内存密钥；整本书与复杂人物的识别准确率仍待扩展验证，后续收费调用需另行授权。 正式 SMTP 和需 Pro 及以上套餐的泄露密码保护留待公开注册前处理。最新验证范围见 [项目状态](../PROJECT_STATUS.md)。
+V0.4 的整书流程使用离线模拟验证，真实整书归属质量待单独授权评估。先前的 V0.3 真机升级、云同步和原创短章真实推理记录保留在项目状态中。 [项目状态](../PROJECT_STATUS.md) · [质量验证](AI_QUALITY.md)
