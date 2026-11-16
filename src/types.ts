@@ -20,9 +20,11 @@ export interface CharacterIdentity {
   version: 1; initialName: string; initialAliases?: string[]; introducedAt: IdentityLocation; events: CharacterIdentityEvent[];
 }
 export interface Character { id: string; bookId: string; name: string; aliases: string[]; identity?: CharacterIdentity }
+export interface AvatarRevision { characterId: string; bookId: string; updatedAt: number; revision: string; digest?: string }
+export interface CharacterAvatar extends AvatarRevision { image?: Blob }
 export interface Dialogue { id: string; bookId: string; chapterId: string; paragraphIndex: number; start: number; end: number; text: string; characterId: string | null; confidence: number; source: 'ai' | 'manual'; model?: string; updatedAt: number; speakerLabel?: string }
 export interface CharacterCorrection { id: string; dialogueId: string; bookId: string; characterId: string | null; updatedAt: number }
 export interface AnalysisJob { id: string; bookId: string; chapterId: string; status: 'queued' | 'running' | 'paused' | 'done' | 'failed' | 'cancelled'; completedChunks: number; totalChunks: number; error?: string; updatedAt: number; model?: string; reservedUsd?: number; estimatedMaxUsd?: number }
-export interface Preferences { theme: 'light' | 'dark' | 'sepia'; fontFamily: 'serif' | 'sans'; fontSize: number; lineHeight: number; readerWidth: number; showCharacters: boolean }
+export interface Preferences { theme: 'light' | 'dark' | 'sepia'; fontFamily: 'serif' | 'sans'; fontSize: number; lineHeight: number; readerWidth: number; showCharacters: boolean; showAvatars?: boolean }
 export interface SyncState { id: string; updatedAt: number; lastSyncedAt?: number; error?: string }
-export const defaultPreferences: Preferences = { theme: 'light', fontFamily: 'serif', fontSize: 20, lineHeight: 1.95, readerWidth: 720, showCharacters: true };
+export const defaultPreferences: Preferences = { theme: 'light', fontFamily: 'serif', fontSize: 20, lineHeight: 1.95, readerWidth: 720, showCharacters: true, showAvatars: true };

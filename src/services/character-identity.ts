@@ -117,6 +117,7 @@ export function createIdentityProjector(characters: readonly Character[], dialog
     const eligible = new Map<string, Character>();
     const targetById = new Map<string, string>();
     const selected = new Map<string, Character>();
+    const membersById = new Map<string, Character[]>();
     const mergedNames = new Map<string, string[]>();
     for (const source of byId.values()) {
       const introduced = locations.get(source.id);
@@ -128,6 +129,9 @@ export function createIdentityProjector(characters: readonly Character[], dialog
       const target = eligible.get(canonical) || source;
       targetById.set(source.id, target.id);
       selected.set(target.id, target);
+      const members = membersById.get(target.id);
+      if (members) members.push(source);
+      else membersById.set(target.id, [source]);
       if (target.id !== source.id) {
         const names = mergedNames.get(target.id) || [];
         names.push(source.name, ...source.aliases);
@@ -149,6 +153,8 @@ export function createIdentityProjector(characters: readonly Character[], dialog
     return {
       characters: [...selected.values()],
       character: (id: string | null): Character | undefined => id ? selected.get(targetById.get(id) || '') : undefined,
+      members: (id: string): readonly Character[] => membersById.get(id) ?? [],
+      introduction: (id: string): IdentityLocation | undefined => eligible.has(id) ? locations.get(id) : undefined,
     };
   };
 }

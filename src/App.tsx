@@ -3,7 +3,7 @@ import { AnimatePresence, LayoutGroup } from 'motion/react';
 import { ArrowDownToLine, ArrowRight, BookOpen, Bookmark as BookmarkIcon, Check, CloudOff, Folder, Library, LoaderCircle, Moon, Plus, Search, Settings as SettingsIcon, Sparkles, Sun, Upload, X } from 'lucide-react';
 import type { Session } from '@supabase/supabase-js';
 import { db } from './core/db';
-import { addSampleBook, importBook, listChapters, exportBackup, restoreBackup } from './core/library';
+import { addSampleBook, importBook, listChapters, exportBackup, restoreBackup, type BackupAccount } from './core/library';
 import type { Book, Chapter, Preferences, ReadingProgress } from './types';
 import { defaultPreferences } from './types';
 import { download, notify, run, useQuery, useMotionPreference as useReducedMotion } from './ui/common';
@@ -173,6 +173,15 @@ export default function App() {
     }
     setBusy(false); if (count) notify(`已保存 ${count} 本书到本机，离线也能读。`);
   }
+  const backupAccount = (): BackupAccount => {
+    const { url: origin } = getCloudConfig();
+    const expected = cloudUserId ? origin + '/' + cloudUserId : undefined;
+    return { origin, userId: cloudUserId, assertCurrent() {
+      if (principal.current !== expected || getCloudConfig().url !== origin) {
+        throw new Error('备份操作期间账号已切换，请重试。');
+      }
+    } };
+  };
   const openAccountSettings = () => { setSettingsTab('cloud'); setSettings(true); };
   const handleAuthCallback = () => { openEpoch.current++; opening.current = false; setActive(null); setDetails(null); setSettings(false); setTransitionBookId(null); };
   const syncLabel = !online ? '离线可读' : syncStatus.status === 'syncing' ? '正在同步' : syncStatus.status === 'error' ? '同步需重试' : cloudUserId ? '已登录 · 本机书库' : '本机书库';
@@ -202,13 +211,13 @@ export default function App() {
           <section className="collection"><div className="collection-toolbar"><div className="collection-heading"><h2>{heading}</h2><span>{visible.length} 本藏书</span></div><div className="collection-tools"><label className="search"><Search size={17}/><input aria-label="搜索书名或作者" placeholder="搜索书名、作者…" value={query} onChange={e => setQuery(e.target.value)}/>{query && <button className="icon-button" onClick={() => setQuery('')} aria-label="清空搜索"><X size={14}/></button>}</label><select aria-label="排序方式" value={sort} onChange={e => setSort(e.target.value)}><option value="recent">最近阅读</option><option value="added">最近添加</option><option value="title">书名排序</option></select></div></div>
             <div className="filter-tabs"><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>全部书籍</button><button className={filter === 'recent' ? 'active' : ''} onClick={() => setFilter('recent')}>正在阅读 <span>{recent.length}</span></button>{shelves.map(s => <button key={s.id} className={filter === s.id ? 'active' : ''} onClick={() => setFilter(s.id)}>{s.name}</button>)}</div>
             {visible.length ? <BookOcean books={visible} progress={oceanProgress} readingIds={new Set(pmap.keys())} selectedId={transitionBookId} paused={!!transitionBookId || settings || !!details} onOpen={openBook} onDetails={setDetails} onImport={() => fileInput.current?.click()}/> : <div className="empty-library"><div className="empty-symbol"><BookOpen size={32} strokeWidth={1.2}/><span>✦</span></div><h3>{books.length ? '这里还没有故事' : '好故事，值得被珍藏'}</h3><p>{query ? '换一个书名或作者试试。' : '从电脑或手机导入小说，建立只属于你的书架。'}</p><div className="empty-actions"><button className="secondary" onClick={() => fileInput.current?.click()}><Upload size={16}/>导入 TXT / EPUB</button>{!books.length && <button className="text-button" onClick={() => void run(async () => { const b = await addSampleBook(); await openBook(b); })}>先读一段原创短篇 <ArrowRight size={15}/></button>}</div></div>}
-          </section><footer className="library-footer"><span>你的书，留在你的设备里。云同步由你选择。</span><button onClick={() => void run(async () => download(await exportBackup(), `阅见备份-${new Date().toISOString().slice(0,10)}.json`))}><ArrowDownToLine size={14}/>导出备份</button><button onClick={() => restoreInput.current?.click()}>恢复备份</button></footer>
+          </section><footer className="library-footer"><span>你的书，留在你的设备里。云同步由你选择。</span><button onClick={() => void run(async () => download(await exportBackup(backupAccount()), `阅见备份-${new Date().toISOString().slice(0,10)}.json`))}><ArrowDownToLine size={14}/>导出备份</button><button onClick={() => restoreInput.current?.click()}>恢复备份</button></footer>
         </div>
       </main><nav className="mobile-nav"><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}><Library size={20}/>书架</button><button className={filter === 'recent' ? 'active' : ''} onClick={() => setFilter('recent')}><BookOpen size={20}/>最近</button><button onClick={() => fileInput.current?.click()}><Plus size={23}/>导入</button><button onClick={() => { setNewShelf(true); setSettings(true); }}><Folder size={20}/>分类</button><button onClick={() => setSettings(true)}><SettingsIcon size={20}/>设置</button></nav>
     </div>
-    <input ref={fileInput} className="visually-hidden" type="file" multiple accept=".txt,.epub,text/plain,application/epub+zip" aria-label="导入小说文件" onChange={e => { if (e.target.files) void importFiles(e.target.files); e.target.value = ''; }}/><input ref={restoreInput} className="visually-hidden" type="file" accept=".json" aria-label="恢复备份文件" onChange={e => { const f = e.target.files?.[0]; if (f) void run(() => restoreBackup(f), '备份已恢复'); e.target.value = ''; }}/>
+    <input ref={fileInput} className="visually-hidden" type="file" multiple accept=".txt,.epub,text/plain,application/epub+zip" aria-label="导入小说文件" onChange={e => { if (e.target.files) void importFiles(e.target.files); e.target.value = ''; }}/><input ref={restoreInput} className="visually-hidden" type="file" accept=".json" aria-label="恢复备份文件" onChange={e => { const f = e.target.files?.[0]; if (f) void run(() => restoreBackup(f, backupAccount()), '备份已恢复'); e.target.value = ''; }}/>
     <AnimatePresence onExitComplete={finishReturn}>{active && <Reader key={active.book.id} {...active} preferences={preferences} onPreferences={changePreferences} onClose={closeReader}/>}</AnimatePresence>
-    {settings && <Settings initialTab={settingsTab} preferences={preferences} onPreferences={changePreferences} onClose={() => { setSettings(false); setNewShelf(false); }}/>} {details && <BookDetails book={details} onClose={() => setDetails(null)} onRead={() => { void openBook(details); setDetails(null); }}/>} {drag && <div className="drop-overlay"><Upload size={48}/><h2>把故事放进来</h2><p>松开即可导入 TXT / EPUB</p></div>}
+    {settings && <Settings backupAccount={backupAccount} initialTab={settingsTab} preferences={preferences} onPreferences={changePreferences} onClose={() => { setSettings(false); setNewShelf(false); }}/>} {details && <BookDetails book={details} onClose={() => setDetails(null)} onRead={() => { void openBook(details); setDetails(null); }}/>} {drag && <div className="drop-overlay"><Upload size={48}/><h2>把故事放进来</h2><p>松开即可导入 TXT / EPUB</p></div>}
     {toast && <div className="toast" role="status"><span>{toast}</span><button aria-label="关闭提示" onClick={() => setToast('')}><X size={16}/></button></div>}{update && <div className="update-banner"><Sparkles size={18}/>新版本已就绪<button onClick={() => void run(() => update())}>更新应用</button></div>}
     <AuthCallback onActive={handleAuthCallback} onOpenSettings={openAccountSettings}/>
   </div></LayoutGroup>;

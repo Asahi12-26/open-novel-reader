@@ -6,18 +6,18 @@
 
 ## 当前版本与下载
 
-**当前版本为 0.4.0-beta.2，Android versionCode 4002。** 阅读页的「章节人物识别 → 整书分析」支持一次授权、按章节自动推进、固定累计预算和断点恢复。原有的逐章识别继续可用。操作见 [整书分析指南](docs/BOOK_ANALYSIS.md)。
+**V0.5.0-beta.1** 新增人物头像、正文头像和人物卡片，Android versionCode 为 5001。阅读页「人物管理」可上传及裁剪本地图片，也可查看别名、出场位置、身份历史和相关对白。 [人物头像使用指南](docs/CHARACTER_AVATARS.md)
 
 当前使用 Supabase 内置团队测试邮件，正式公网注册和完整密码找回暂不开放。已有测试账号可在三个平台登录；自建与配置步骤见 [云服务配置](docs/CLOUD_SETUP.md)。
 
 | 平台 | 本轮状态 | 使用入口 |
 | --- | --- | --- |
 | Web / PWA | 在线版 | [在线使用](https://asahi12-26.github.io/open-novel-reader/) |
-| Windows x64 | 安装包未配置发布者签名 | [下载 EXE](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.4.0-beta.2/Open-Novel-Reader_0.4.0-beta.2_windows-x64-setup.exe) |
-| Android ARM64 | 复用固定发布证书 | [下载 APK](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.4.0-beta.2/Open-Novel-Reader_0.4.0-beta.2_android-arm64.apk) |
+| Windows x64 | 安装包未配置发布者签名 | [下载 EXE](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.5.0-beta.1/Open-Novel-Reader_0.5.0-beta.1_windows-x64-setup.exe) |
+| Android ARM64 | 复用固定发布证书 | [下载 APK](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.5.0-beta.1/Open-Novel-Reader_0.5.0-beta.1_android-arm64.apk) |
 | iOS | 保留共享架构，尚无 IPA 构建 | 需要 macOS 和签名条件 |
 
-发布附件含校验文件和第三方许可。Android 0.2 起沿用固定发布证书，可覆盖安装。仍在使用 Android 0.1 开发签名版的用户，先在旧版导出书库，再安装新版并恢复。安装步骤和版本详情见 [使用指南](docs/USAGE.md)与 [V0.4 Beta 2 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.4.0-beta.2)。
+发布附件含校验文件和第三方许可。Android 0.2 起沿用固定发布证书，可覆盖安装。仍在使用 Android 0.1 开发签名版的用户，先在旧版导出书库，再安装新版并恢复。 [使用指南](docs/USAGE.md) · [V0.5 Beta 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.5.0-beta.1)
 
 ## 现在可以用什么
 

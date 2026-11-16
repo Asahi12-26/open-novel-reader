@@ -4,7 +4,7 @@
 
 ## Supabase
 
-1. 创建你自己的 Supabase 项目，在 SQL 编辑器**按文件名顺序执行 `supabase/migrations/` 下全部 4 个迁移**：`202611020001_reader.sql`、`202611030001_profile_revision.sql`、`202611040001_sync_safety.sql`、`202611040002_harden_ddl_helper.sql`；或使用 Supabase CLI `supabase link --project-ref <ref>` 和 `supabase db push`。已配置旧版数据库的用户只需补执行未应用的新迁移，现有数据会保留。
+1. 在自己的 Supabase 项目的 SQL 编辑器按文件名顺序执行 `supabase/migrations/` 下的迁移，或使用 Supabase CLI 的 `supabase link --project-ref <ref>` 和 `supabase db push`。已有项目只需运行待应用的增量迁移。V0.5 的头像迁移创建私有图片桶，现有阅读数据保留。
 2. 在 Auth 中启用邮箱登录，配置正式站点 URL、允许的重定向 URL、SMTP 和邮箱确认策略。首次注册后可能需要先点确认邮件。
 3. 在阅读器设置中填写项目 HTTPS URL 和 **publishable / anon 公钥**；也可构建时设置 `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`。绝不能把 service-role/secret key 放进前端。
 4. 在两台设备登录同一个账号，在书籍详情明确勾选云同步，再执行同步。第一次会上传原文件、章节文本及这本书的元数据。没有选择的书不会被上传。

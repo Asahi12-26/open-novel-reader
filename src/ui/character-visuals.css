@@ -1,0 +1,213 @@
+.character-portrait {
+  --portrait-size: 48px;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: var(--portrait-size);
+  height: var(--portrait-size);
+  overflow: hidden;
+  border-radius: 50%;
+  border: 1px solid var(--portrait-outline, var(--line));
+  color: var(--portrait-ink);
+  background: var(--portrait-paper);
+}
+
+.character-portrait svg { width: 57%; height: 57%; }
+.character-portrait img { width: 100%; height: 100%; object-fit: cover; }
+.character-portrait--inline { --portrait-size: 1.25em; }
+.character-portrait--editor { --portrait-size: clamp(64px, 14vw, 90px); }
+
+.dialogue-avatar-trigger, .dialogue-avatar-placeholder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.46em;
+  height: 1em;
+  padding: 0;
+  margin: 0 .13em 0 .05em;
+  border-radius: 50%;
+  vertical-align: -.10em;
+  text-indent: 0;
+  font: inherit;
+  line-height: 1;
+}
+
+.dialogue-avatar-trigger { position: relative; }
+.dialogue-avatar-trigger::after { content: ""; position: absolute; inset: -.22em -.08em; }
+.dialogue-avatar-trigger:hover .character-portrait { --portrait-outline: var(--accent); }
+.dialogue-avatar-trigger:focus-visible { outline-offset: 2px; }
+.character-choices button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.character-choices .character-portrait { --portrait-size: 20px; }
+
+.person-gallery { display: grid; gap: 17px; }
+.person-gallery-tools { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+.person-gallery-tools select, .person-search input { font-size: 13px; min-height: 42px; }
+.person-search {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  padding-left: 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--surface);
+}
+.person-search input { width: 100%; padding-left: 0; border: 0; background: transparent; }
+.person-spoiler { margin-block: 0; font-size: 12px; }
+.person-spoiler input { width: 16px; height: 16px; flex: 0 0 auto; }
+.person-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.person-grid-card {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  min-height: 92px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  text-align: left;
+  background: var(--surface);
+  transition: border-color .15s, background-color .15s;
+}
+.person-grid-card:hover { background: var(--green-light); border-color: var(--green); }
+.person-grid-card > svg { color: var(--muted); margin-left: auto; }
+.person-grid-copy { display: grid; min-width: 0; gap: 4px; }
+.person-grid-copy strong, .person-grid-copy small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.person-grid-copy strong { font-family: "Songti SC", SimSun, Georgia, serif; font-size: 16px; }
+.person-grid-copy small, .person-card-location { font-size: 11px; color: var(--muted); }
+.person-card-location { display: inline-flex; align-items: center; gap: 5px; }
+.person-grid-empty { padding: 28px 10px; }
+.person-show-more { justify-self: center; }
+.person-action-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: stretch; }
+.person-action-form input, .person-action-form select { width: 100%; min-height: 42px; font-size: 13px; }
+.person-action-form button { padding-inline: 12px; }
+.person-add { padding-top: 14px; border-top: 1px solid var(--line); }
+
+.person-profile { display: grid; gap: 16px; min-width: 0; }
+.person-profile-back { justify-self: start; min-height: 35px; font-size: 13px; }
+.person-profile-hero {
+  display: flex;
+  align-items: center;
+  gap: clamp(13px, 3vw, 22px);
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--green-light);
+}
+.person-profile-headline { min-width: 0; }
+.person-profile .person-profile-hero h3 {
+  margin: 0 0 9px;
+  font-family: "Songti SC", SimSun, Georgia, serif;
+  font-size: clamp(23px, 5vw, 31px);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.person-facts { margin: 0; font-size: 12px; display: flex; flex-wrap: wrap; gap: 5px 18px; }
+.person-facts > div { display: flex; align-items: baseline; gap: 6px; }
+.person-facts dt { color: var(--green); }
+.person-facts dd { margin: 0; overflow-wrap: anywhere; }
+.person-profile-section { border-top: 1px solid var(--line); padding-top: 14px; }
+.person-profile-section h4 { font-size: 14px; margin: 0 0 10px; }
+.person-details > summary { cursor: pointer; padding-block: 5px; font-size: 14px; font-weight: 600; }
+.person-details > summary span { margin-left: 4px; font-size: 11px; font-weight: 400; color: var(--muted); }
+.person-aliases { min-height: 40px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0; }
+.person-aliases small { color: var(--muted); font-size: 12px; }
+.person-aliases > span { display: inline-flex; align-items: center; gap: 4px; padding-left: 9px; border-radius: 7px; border: 1px solid var(--line); font-size: 12px; overflow-wrap: anywhere; }
+.person-aliases button { font-size: 16px; color: var(--muted); min-width: 30px; min-height: 32px; }
+.person-aliases button:hover { color: var(--ink); }
+.person-history, .person-dialogues { display: grid; gap: 8px; list-style: none; padding: 0; margin: 10px 0; }
+.person-history > li, .person-dialogues > li {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--surface);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.person-history strong, .person-history small { color: var(--muted); font-size: 11px; font-weight: 400; }
+.person-dialogues > li p {
+  margin: 0;
+  font-family: "Songti SC", SimSun, Georgia, serif;
+  font-size: 14px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.person-dialogue-actions { display: flex; gap: 4px 16px; flex-wrap: wrap; }
+.person-dialogue-actions button { min-height: 36px; font-size: 12px; }
+.person-retained p { color: var(--muted); font-size: 12px; margin: 12px 0 7px; }
+.person-retained ul { list-style: none; display: flex; flex-wrap: wrap; gap: 9px; padding: 0; margin: 0; }
+.person-retained li { min-width: 0; max-width: 135px; display: grid; justify-items: center; gap: 4px; padding: 7px; font-size: 11px; border: 1px solid var(--line); border-radius: 8px; overflow-wrap: anywhere; }
+.portrait-editor { min-width: 0; }
+.portrait-editor-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.portrait-editor-actions > :is(.primary, .secondary) { padding-inline: 12px; }
+.person-gallery button, .portrait-file-picker input { touch-action: manipulation; }
+.portrait-file-picker { cursor: pointer; position: relative; overflow: hidden; }
+.portrait-file-picker:focus-within { outline: 2px solid var(--accent); outline-offset: 4px; }
+.portrait-file-picker:has(input:disabled) { opacity: .5; cursor: not-allowed; }
+.portrait-file-picker input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; padding: 0; cursor: inherit; }
+.portrait-reset { padding-inline: 6px; font-size: 12px; min-height: 42px; }
+.portrait-hint { color: var(--muted); font-size: 12px; line-height: 1.55; margin: 9px 0; }
+.portrait-crop-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 15px;
+  align-items: start;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+}
+.portrait-crop-editor .portrait-editor-actions { grid-column: 1 / -1; }
+.portrait-crop-preview {
+  position: relative;
+  width: 100%;
+  max-width: 230px;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border-radius: 10px;
+  cursor: grab;
+  touch-action: none;
+  background: var(--surface);
+}
+.portrait-crop-preview:active { cursor: grabbing; }
+.portrait-crop-preview img { position: absolute; max-width: none; pointer-events: none; user-select: none; }
+.portrait-crop-preview::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1px solid #fff9;
+  border-radius: 50%;
+  box-shadow: 0 0 0 50vw #151d1a44;
+  pointer-events: none;
+}
+.portrait-crop-controls label { display: grid; gap: 4px; font-size: 12px; margin: 7px 0; }
+.portrait-crop-controls input { display: block; width: 100%; height: 28px; padding: 0; accent-color: var(--green); }
+.portrait-crop-controls .portrait-hint { margin-top: 0; }
+
+@media (max-width: 650px) {
+  .person-gallery-tools { grid-template-columns: minmax(0, 1fr) minmax(0, 128px); gap: 6px; }
+  .person-gallery-tools select { padding: 7px; font-size: 11px; }
+  .person-card-grid { gap: 7px; }
+  .person-grid-card { gap: 7px; padding: 8px; min-height: 76px; }
+  .person-grid-card .character-portrait { --portrait-size: 34px; }
+  .person-grid-card > svg { display: none; }
+  .person-grid-copy strong { font-size: 14px; }
+  .person-grid-copy small, .person-card-location { font-size: 10px; }
+  .person-profile-hero { padding: 13px; }
+  .portrait-crop-editor { grid-template-columns: 1fr; gap: 10px; padding: 10px; }
+  .portrait-crop-preview { width: min(100%, 170px); justify-self: center; }
+}

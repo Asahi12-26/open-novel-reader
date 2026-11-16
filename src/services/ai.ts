@@ -236,15 +236,24 @@ async function stableCharacterId(bookId: string, name: string) {
   return bookId + ':character:' + [...new Uint8Array(digest)].map(x => x.toString(16).padStart(2, '0')).join('').slice(0, 24);
 }
 export async function createCharacter(bookId: string, name: string, scope?: IdentityLocation): Promise<Character> {
-  const clean = name.trim().slice(0, 80);
+  const clean = name.replace(/[\x00-\x1f]+/g, ' ').trim().slice(0, 80);
   if (!clean) throw new AIError('请输入人物名称。');
+  if (scope) {
+    const id = `${bookId}:character:${crypto.randomUUID()}`;
+    const character = initializeCharacterIdentity({ id, bookId, name: clean, aliases: [] }, scope);
+    return db.transaction('rw', db.books, db.characters, async () => {
+      const book = await db.books.get(bookId);
+      if (!book || book.deletedAt) throw new AIError('当前书籍已移除。');
+      await db.characters.add(character);
+      return character;
+    });
+  }
   const id = await stableCharacterId(bookId, clean);
   return db.transaction('rw', db.characters, async () => {
     const known = await db.characters.where('bookId').equals(bookId).toArray();
     const existing = known.find(c => [c.name, ...c.aliases].some(n => normalizedName(n) === normalizedName(clean)));
     if (existing) return existing;
-    let character: Character = { id, bookId, name: clean, aliases: [] };
-    if (scope) character = initializeCharacterIdentity(character, scope);
+    const character: Character = { id, bookId, name: clean, aliases: [] };
     await db.characters.put(character); return character;
   });
 }
@@ -252,12 +261,13 @@ export async function renameCharacter(characterId: string, name: string, scope?:
   await manualRenameCharacter(characterId, name, scope);
 }
 export async function correctDialogue(dialogueId: string, characterId: string | null): Promise<void> {
-  const dialogue = await db.dialogues.get(dialogueId);
-  if (!dialogue) throw new AIError('未找到对白。');
-  if (characterId && (await db.characters.get(characterId))?.bookId !== dialogue.bookId) throw new AIError('人物不属于当前书籍。');
-  await db.transaction('rw', db.corrections, db.dialogues, async () => {
-    await db.corrections.put({ id: `manual:${dialogueId}`, dialogueId, bookId: dialogue.bookId, characterId, updatedAt: Date.now() });
-    await db.dialogues.update(dialogueId, { characterId, source: 'manual', confidence: 1, updatedAt: Date.now() });
+  await db.transaction('rw', db.corrections, db.dialogues, db.characters, async () => {
+    const dialogue = await db.dialogues.get(dialogueId);
+    if (!dialogue) throw new AIError('未找到对白。');
+    if (characterId && (await db.characters.get(characterId))?.bookId !== dialogue.bookId) throw new AIError('人物不属于当前书籍。');
+    const updatedAt = Date.now();
+    await db.corrections.put({ id: `manual:${dialogueId}`, dialogueId, bookId: dialogue.bookId, characterId, updatedAt });
+    await db.dialogues.update(dialogueId, { characterId, source: 'manual', confidence: 1, updatedAt });
   });
 }
 export async function mergeCharacters(sourceId: string, targetId: string, scope?: IdentityLocation): Promise<void> {

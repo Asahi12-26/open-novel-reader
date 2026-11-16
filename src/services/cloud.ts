@@ -1,9 +1,11 @@
 import { createClient, type AuthChangeEvent, type Session, type SupabaseClient, type User } from '@supabase/supabase-js';
 import { db } from '../core/db';
+import { compareAvatarRevisions, validAvatarRevision, validateAvatarImage } from '../core/avatar';
+import { bookAccountScope as accountScope, bookOwnerKey as ownerKey, bookOwnerScope, LEGACY_BOOK_ORIGIN_KEY as LEGACY_ORIGIN_KEY } from '../core/book-owner';
 import { MAX_FILE_BYTES, parseEpub, parseTxt } from '../core/parser';
 import { defaultPreferences } from '../types';
 import { mergeCharacterIdentity, validCharacterIdentity, validIdentityGraph } from './character-identity';
-import type { Book, BookFile, Chapter, ReadingProgress, Bookmark, Character, Dialogue, CharacterCorrection, AnalysisJob, Bookshelf, Preferences } from '../types';
+import type { AvatarRevision, Book, BookFile, Chapter, ReadingProgress, Bookmark, Character, CharacterAvatar, Dialogue, CharacterCorrection, AnalysisJob, Bookshelf, Preferences } from '../types';
 
 export interface CloudConfig { url: string; anonKey: string }
 export interface SyncResult { uploaded: number; downloaded: number; conflicts: number }
@@ -11,12 +13,16 @@ export interface BookBundle {
   schema: 1; book: Book; chapters: Chapter[]; progress?: ReadingProgress;
   bookmarks: Bookmark[]; characters: Character[]; dialogues: Dialogue[];
   corrections: CharacterCorrection[]; jobs: AnalysisJob[];
+  avatars?: AvatarRevision[];
   file?: { name: string; mime: string; path: string };
 }
 interface CloudRow { id: string; payload: BookBundle; revision: number }
 interface Link { revision: number; snapshot: BookBundle }
 export const CLOUD_FILE_MAX_BYTES = 50 * 1024 * 1024;
 export const CLOUD_BUNDLE_MAX_BYTES = 30 * 1024 * 1024;
+const AVATAR_BUCKET = 'character-avatars';
+const MAX_AVATAR_RECORDS_PER_BOOK = 5000;
+class AvatarSyncError extends Error {}
 let client: SupabaseClient | null = null;
 let activeSync: Promise<SyncResult> | null = null;
 let activeSyncEpoch = -1;
@@ -24,7 +30,6 @@ let accountEpoch = 0;
 let cachedAuthIdentity: string | null | undefined;
 let stopClientAuth: (() => void) | undefined;
 const CONFIG_KEY = 'onr.cloud.public-config';
-const LEGACY_ORIGIN_KEY = 'onr.cloud.legacy-owner-origin';
 function rememberLegacyOrigin(origin: string) {
   if (origin && !localStorage.getItem(LEGACY_ORIGIN_KEY)) localStorage.setItem(LEGACY_ORIGIN_KEY, origin);
 }
@@ -137,16 +142,10 @@ export function subscribeAuth(callback: (session: Session | null, event: AuthCha
     return () => {};
   }
 }
-const ownerKey = (bookId: string) => `cloud-owner:${bookId}`;
 const linkKey = (scope: string, bookId: string) => `cloud-link:${scope}:${bookId}`;
 const archiveKey = (scope: string, bookId: string) => `cloud-local-book:${scope}:${bookId}`;
-const accountScope = (origin: string, userId: string) => `${origin}|${userId}`;
-function ownerScope(value: unknown): string | undefined {
-  if (typeof value !== 'string' || !value) return undefined;
-  if (value.includes('|')) return value;
-  const origin = localStorage.getItem(LEGACY_ORIGIN_KEY) || getCloudConfig().url;
-  return origin ? accountScope(origin, value) : undefined;
-}
+const avatarArchiveKey = (scope: string, bookId: string) => `cloud-local-avatars:${scope}:${bookId}`;
+const ownerScope = (value: unknown) => bookOwnerScope(value, getCloudConfig().url);
 interface LocalAccountContext {
   userId: string; origin: string; scope: string;
   assertLive(): void; assertCurrent(): Promise<void>;
@@ -175,9 +174,12 @@ async function readLink(context: AccountContext, bookId: string): Promise<Link |
   if (scoped) return scoped;
   if (context.origin === localStorage.getItem(LEGACY_ORIGIN_KEY)) return (await db.settings.get(linkKey(context.userId, bookId)))?.value as Link | undefined;
 }
+const bookStoragePrefix = (book: Book, userId: string) => `${userId}/${book.id}`;
+const generation = (book: Book) => book.restoredAt ? `restored-${book.restoredAt}` : 'initial';
 function generatedFilePath(book: Book, userId: string): string {
-  return `${userId}/${book.id}/${book.restoredAt ? `restored-${book.restoredAt}/` : ''}original.${book.format}`;
+  return `${bookStoragePrefix(book, userId)}/${book.restoredAt ? `${generation(book)}/` : ''}original.${book.format}`;
 }
+const avatarPath = (book: Book, userId: string, digest: string) => `${bookStoragePrefix(book, userId)}/${generation(book)}/${digest}.png`;
 function allowedFilePath(path: string, book: Book, userId: string): boolean {
   return path === `${userId}/${book.id}/original.${book.format}` || path === generatedFilePath(book, userId);
 }
@@ -204,6 +206,13 @@ async function replaceBookRows(bundle: BookBundle): Promise<void> {
   }
   if (bundle.progress && !bundle.book.deletedAt) await db.progress.put(bundle.progress);
   else await db.progress.delete(id);
+}
+function readLocalAvatars(bookId: string): Promise<CharacterAvatar[]> {
+  return db.avatars.where('bookId').equals(bookId).toArray();
+}
+async function replaceLocalAvatars(bookId: string, avatars: CharacterAvatar[]) {
+  await db.avatars.where('bookId').equals(bookId).delete();
+  if (avatars.length) await db.avatars.bulkPut(avatars);
 }
 async function switchLocalBook(context: LocalAccountContext, bookId: string, explicitImport: boolean): Promise<Book> {
   const originalBook = await db.books.get(bookId);
@@ -235,11 +244,17 @@ async function switchLocalBook(context: LocalAccountContext, bookId: string, exp
     selected = { schema: 1, book: { id: bookId, fingerprint: originalBook.fingerprint, format: originalBook.format, title: parsed.title, author: parsed.author, language: parsed.language, cover: parsed.cover, coverColor: originalBook.coverColor, totalWords: parsed.totalWords, chapterCount: parsed.chapters.length, createdAt: now, updatedAt: restoredAt || now, cloudEnabled: false, ...(restoredAt === undefined ? {} : { restoredAt }), ...(!explicitImport && originalBook.deletedAt !== undefined ? { deletedAt: originalBook.deletedAt } : {}) }, chapters: parsed.chapters, bookmarks: [], characters: [], dialogues: [], corrections: [], jobs: [], file: { name: file.name, mime: file.mime, path: `${context.userId}/${bookId}/original.${originalBook.format}` } };
   }
   await context.assertCurrent();
-  await db.transaction('rw', [db.books, db.chapters, db.progress, db.bookmarks, db.characters, db.dialogues, db.corrections, db.jobs, db.files, db.settings], async () => {
+  await db.transaction('rw', [db.books, db.chapters, db.progress, db.bookmarks, db.characters, db.dialogues, db.corrections, db.jobs, db.files, db.settings, db.avatars], async () => {
     context.assertLive();
     const current = await db.books.get(bookId);
     if (!current || ownerScope((await db.settings.get(ownerKey(bookId)))?.value) !== previousOwner || !equal(await bundleBook(current, previousUser, previousOwner), before)) throw new Error('本机阅读数据已更新，请重试导入或同步。');
     await db.settings.put({ id: archiveKey(previousOwner, bookId), value: before });
+    const previousAvatars = await readLocalAvatars(bookId);
+    if (previousAvatars.length) await db.settings.put({ id: avatarArchiveKey(previousOwner, bookId), value: previousAvatars });
+    else await db.settings.delete(avatarArchiveKey(previousOwner, bookId));
+    const savedAvatars = (await db.settings.get(avatarArchiveKey(context.scope, bookId)))?.value as CharacterAvatar[] | undefined;
+    const selectedIds = new Set(selected.characters.map(character => character.id));
+    await replaceLocalAvatars(bookId, savedAvatars?.filter(row => selectedIds.has(row.characterId)) || []);
     await replaceBookRows(selected);
     await db.settings.put({ id: ownerKey(bookId), value: context.scope });
     context.assertLive();
@@ -299,6 +314,21 @@ function mergeList<T extends { id: string }>(local: T[], remote: T[], base: T[])
   }
   return result.sort((a, b) => a.id.localeCompare(b.id));
 }
+function avatarManifest(rows: CharacterAvatar[]): AvatarRevision[] {
+  return rows.map(({ characterId, bookId, updatedAt, revision, digest }) => ({
+    characterId, bookId, updatedAt, revision, ...(digest ? { digest } : {}),
+  })).sort((a, b) => a.characterId.localeCompare(b.characterId));
+}
+function mergeAvatarManifest(...lists: (AvatarRevision[] | undefined)[]): AvatarRevision[] {
+  const byCharacter = new Map<string, AvatarRevision>();
+  // An omitted list from a legacy device never resets newer avatar revisions.
+  for (const rows of lists) for (const row of rows || []) {
+    const prior = byCharacter.get(row.characterId);
+    if (prior?.revision === row.revision && !equal(prior, row)) throw new AvatarSyncError('头像版本与内容不一致，本机头像已保留。');
+    if (!prior || compareAvatarRevisions(row, prior) > 0) byCharacter.set(row.characterId, row);
+  }
+  return [...byCharacter.values()].sort((a, b) => a.characterId.localeCompare(b.characterId));
+}
 /** Three-way merge; permanent tombstones win and corrections remain separate from AI output. */
 export function mergeBundles(local: BookBundle, remote: BookBundle, base: BookBundle): BookBundle {
   const deletedAt = Math.max(local.book.deletedAt || 0, remote.book.deletedAt || 0);
@@ -308,7 +338,7 @@ export function mergeBundles(local: BookBundle, remote: BookBundle, base: BookBu
   const restoration = [local.book, remote.book].filter(b => !b.deletedAt && b.restoredAt === restoredAt).sort((a, b) => b.updatedAt - a.updatedAt)[0];
   const { deletedAt: _previousDeletion, ...liveBook } = restoration || book;
   // An older tombstone's empty lists are not new annotation deletions after explicit reimport.
-  const listBase = deletedAt && restoredAt > deletedAt ? { ...base, bookmarks: [], characters: [], dialogues: [], corrections: [], jobs: [] } : base;
+  const listBase = deletedAt && restoredAt > deletedAt ? { ...base, bookmarks: [], characters: [], dialogues: [], corrections: [], jobs: [], avatars: undefined } : base;
   const localCharacters = new Map(local.characters.map(character => [character.id, character]));
   const remoteCharacters = new Map(remote.characters.map(character => [character.id, character]));
   const baseCharacters = new Map(listBase.characters.map(character => [character.id, character]));
@@ -339,6 +369,10 @@ export function mergeBundles(local: BookBundle, remote: BookBundle, base: BookBu
     jobs: mergeList(local.jobs, remote.jobs, listBase.jobs), file: !local.book.deletedAt && local.file ? local.file : remote.file || local.file,
   };
   const characters = new Map(merged.characters.map(c => [c.id, c]));
+  const sameGenerationAvatars = (source: BookBundle) => source.book.deletedAt === undefined && generation(source.book) === generation(merged.book) ? source.avatars : undefined;
+  const avatars = mergeAvatarManifest(sameGenerationAvatars(listBase), sameGenerationAvatars(local), sameGenerationAvatars(remote));
+  if (avatars.some(row => !characters.has(row.characterId))) throw new AvatarSyncError('另一台设备移除了带头像记录的人物，本机头像已保留。请更新阅读器后复核人物。');
+  if (avatars.length) merged.avatars = avatars;
   const previousCharacters = new Map([...base.characters, ...remote.characters, ...local.characters].map(c => [c.id, c]));
   const remap = (id: string | null): string | null => {
     if (!id || characters.has(id)) return id;
@@ -363,15 +397,23 @@ export function assertCloudUploadLimits(bundle: BookBundle, originalSize: number
 async function bundleBook(book: Book, userId: string, scope = accountScope(getCloudConfig().url, userId)): Promise<BookBundle> {
   const path = await currentFilePath(book, userId, scope);
   if (book.deletedAt) return { schema: 1, book: { ...book, cover: undefined }, chapters: [], bookmarks: [], characters: [], dialogues: [], corrections: [], jobs: [], file: { name: '', mime: '', path } };
-  const [chapters, progress, bookmarks, characters, dialogues, corrections, jobs, file] = await Promise.all([
+  const [chapters, progress, bookmarks, characters, dialogues, corrections, jobs, file, avatars] = await Promise.all([
     db.chapters.where('bookId').equals(book.id).sortBy('index'), db.progress.get(book.id),
     db.bookmarks.where('bookId').equals(book.id).toArray(), db.characters.where('bookId').equals(book.id).toArray(),
     db.dialogues.where('bookId').equals(book.id).toArray(), db.corrections.where('bookId').equals(book.id).toArray(),
-    db.jobs.where('bookId').equals(book.id).toArray(), db.files.get(book.id),
+    db.jobs.where('bookId').equals(book.id).toArray(), db.files.get(book.id), readLocalAvatars(book.id),
   ]);
   const sort = <T extends { id: string }>(rows: T[]) => rows.sort((a, b) => a.id.localeCompare(b.id));
   return { schema: 1, book, chapters, progress, bookmarks: sort(bookmarks), characters: sort(characters), dialogues: sort(dialogues), corrections: sort(corrections), jobs: sort(jobs),
-    file: file ? { name: file.name, mime: file.mime, path } : undefined };
+    ...(avatars.length ? { avatars: avatarManifest(avatars) } : {}), file: file ? { name: file.name, mime: file.mime, path } : undefined };
+}
+function validateAvatarManifest(bundle: BookBundle, characterIds = new Set(bundle.characters.map(character => character.id))) {
+  const rows = bundle.avatars;
+  if (rows === undefined) return;
+  if (!Array.isArray(rows) || rows.length > MAX_AVATAR_RECORDS_PER_BOOK || (bundle.book.deletedAt !== undefined && rows.length) ||
+      rows.some(row => !validAvatarRevision(row) || row.bookId !== bundle.book.id || !characterIds.has(row.characterId) ||
+        Object.keys(row).some(key => !['characterId', 'bookId', 'updatedAt', 'revision', 'digest'].includes(key))) ||
+      new Set(rows.map(row => row.characterId)).size !== rows.length) throw new AvatarSyncError('头像记录无效或超过单本书 5000 条上限，本机数据已保留。');
 }
 export function validateBundle(value: unknown, id: string): asserts value is BookBundle {
   const b = value as BookBundle;
@@ -390,6 +432,7 @@ export function validateBundle(value: unknown, id: string): asserts value is Boo
   };
   const characterIds = new Set(b.characters.map(c => c.id));
   if (b.characters.some(c => !text(c.name, 300) || !Array.isArray(c.aliases) || c.aliases.length > 300 || c.aliases.some(a => !text(a, 300)) || !validCharacterIdentity(c.identity)) || !validIdentityGraph(b.characters, b.chapters)) throw new Error('云端人物数据无效。');
+  validateAvatarManifest(b, characterIds);
   if (b.progress && (b.progress.bookId !== id || !location(b.progress) || !integer(b.progress.offset) || b.progress.offset > chapters.get(b.progress.chapterId)!.paragraphs[b.progress.paragraphIndex].length || !integer(b.progress.updatedAt) || !integer(b.progress.version))) throw new Error('云端进度无效。');
   if (b.bookmarks.some(m => !location(m) || !text(m.label, 2000) || !integer(m.createdAt))) throw new Error('云端书签无效。');
   for (const d of b.dialogues) {
@@ -405,7 +448,45 @@ export function validateBundle(value: unknown, id: string): asserts value is Boo
   if (b.book.deletedAt && (b.chapters.length || b.dialogues.length || b.bookmarks.length)) throw new Error('删除记录不能包含正文。');
   if (!b.book.deletedAt && (b.chapters.length !== b.book.chapterCount || !b.file)) throw new Error('云端书籍缺少原文件或章节。');
 }
-async function applyBundle(bundle: BookBundle, context: AccountContext, revision: number, expectedLocal?: BookBundle) {
+async function stageAvatarRows(bundle: BookBundle, context: AccountContext): Promise<CharacterAvatar[]> {
+  const { userId, cloud } = context;
+  const local = new Map((await readLocalAvatars(bundle.book.id)).filter(row => row.image && row.digest).map(row => [row.digest!, row.image!]));
+  const result: CharacterAvatar[] = [];
+  for (const row of bundle.avatars || []) {
+    if (!row.digest) { result.push(row); continue; }
+    let image = local.get(row.digest);
+    if (!image) {
+      await context.assertCurrent();
+      const { data, error } = await cloud.storage.from(AVATAR_BUCKET).download(avatarPath(bundle.book, userId, row.digest));
+      if (error || !data || await validateAvatarImage(data).catch(() => '') !== row.digest) throw new AvatarSyncError('头像下载或内容校验失败，本机头像已保留。');
+      image = data;
+      local.set(row.digest, image);
+    }
+    result.push({ ...row, image });
+  }
+  return result;
+}
+async function uploadAvatarImages(bundle: BookBundle, rows: CharacterAvatar[], remote: BookBundle | undefined, context: AccountContext) {
+  const uploaded = new Set(remote && generation(bundle.book) === generation(remote.book) ? remote.avatars?.flatMap(row => row.digest ? [row.digest] : []) : []);
+  const bucket = context.cloud.storage.from(AVATAR_BUCKET);
+  for (const row of rows) {
+    if (!row.digest || uploaded.has(row.digest)) continue;
+    if (!row.image || await validateAvatarImage(row.image).catch(() => '') !== row.digest) throw new AvatarSyncError('本机头像校验失败，未上传头像。');
+    await assertBookAuthorized(context, bundle.book.id);
+    const path = avatarPath(bundle.book, context.userId, row.digest);
+    const { error } = await bucket.upload(path, row.image, { upsert: false, contentType: 'image/png' });
+    if (error) {
+      // A competing write or a prior metadata conflict may have uploaded identical bytes.
+      await context.assertCurrent();
+      const existing = await bucket.download(path);
+      if (existing.error || !existing.data || await validateAvatarImage(existing.data).catch(() => '') !== row.digest) {
+        throw new AvatarSyncError('头像上传失败。请确认云端已安装人物头像迁移，重试时本机头像仍会保留。');
+      }
+    }
+    uploaded.add(row.digest);
+  }
+}
+async function applyBundle(bundle: BookBundle, context: AccountContext, revision: number, expectedLocal?: BookBundle, stagedAvatars?: CharacterAvatar[]) {
   const { userId, cloud } = context;
   context.assertLive();
   const current = await db.books.get(bundle.book.id);
@@ -413,6 +494,7 @@ async function applyBundle(bundle: BookBundle, context: AccountContext, revision
   if (current && current.fingerprint !== bundle.book.fingerprint) throw new Error('书籍 ID 冲突，已保留本地版本。');
   const id = bundle.book.id;
   if (bundle.file && !allowedFilePath(bundle.file.path, bundle.book, userId)) throw new Error('云端文件路径不匹配。');
+  const avatars = stagedAvatars ?? await stageAvatarRows(bundle, context);
   let file: BookFile | undefined;
   if (bundle.file && !bundle.book.deletedAt && !(await db.files.get(id))) {
     const { data, error } = await cloud.storage.from('novel-files').download(bundle.file.path);
@@ -429,7 +511,7 @@ async function applyBundle(bundle: BookBundle, context: AccountContext, revision
     if (!equal(parsed.chapters, bundle.chapters)) throw new Error('云端章节与原文件不一致，已保留本地数据。');
   }
   await context.assertCurrent();
-  await db.transaction('rw', [db.books, db.chapters, db.progress, db.bookmarks, db.characters, db.dialogues, db.corrections, db.jobs, db.files, db.settings], async () => {
+  await db.transaction('rw', [db.books, db.chapters, db.progress, db.bookmarks, db.characters, db.dialogues, db.corrections, db.jobs, db.files, db.settings, db.avatars], async () => {
     context.assertLive();
     const latestBook = await db.books.get(id);
     if ((!current && latestBook) || ownerScope((await db.settings.get(ownerKey(id)))?.value) !== previousOwner) return;
@@ -453,6 +535,7 @@ async function applyBundle(bundle: BookBundle, context: AccountContext, revision
     if (bundle.book.deletedAt) await db.progress.delete(id);
     else if (bundle.progress) await db.progress.put(bundle.progress);
     if (file) await db.files.put(file);
+    await replaceLocalAvatars(id, avatars);
     await db.settings.put({ id: ownerKey(id), value: context.scope });
     await db.settings.put({ id: linkKey(context.scope, id), value: { revision, snapshot: bundle } satisfies Link });
     context.assertLive();
@@ -460,6 +543,7 @@ async function applyBundle(bundle: BookBundle, context: AccountContext, revision
 }
 async function saveRemote(id: string, payload: BookBundle, revision: number, cloud: SupabaseClient): Promise<number> {
   const { data, error } = await cloud.rpc('save_reader_record', { p_id: id, p_payload: payload, p_expected_revision: revision });
+  if (error?.message.includes('AVATAR_CHARACTER_CONFLICT')) throw new AvatarSyncError('人物头像已保留。请在两台设备更新阅读器后重新合并人物。');
   if (error) throw new Error(error.message.includes('SYNC_CONFLICT') ? '另一台设备刚修改了此书。再次同步即可合并。' : '云端保存失败：' + error.message);
   return Number(data);
 }
@@ -470,7 +554,8 @@ function normalizeProfile(value: unknown): Profile {
   const p = value as Partial<Profile> | null;
   const v = p?.preferences;
   const preferences: Preferences = v && ['light', 'dark', 'sepia'].includes(v.theme) && ['serif', 'sans'].includes(v.fontFamily) && Number.isFinite(v.fontSize) && v.fontSize >= 12 && v.fontSize <= 48 && Number.isFinite(v.lineHeight) && v.lineHeight >= 1.2 && v.lineHeight <= 3 && Number.isFinite(v.readerWidth) && v.readerWidth >= 300 && v.readerWidth <= 1600 && typeof v.showCharacters === 'boolean' ?
-    { theme: v.theme, fontFamily: v.fontFamily, fontSize: v.fontSize, lineHeight: v.lineHeight, readerWidth: v.readerWidth, showCharacters: v.showCharacters } : { ...defaultPreferences };
+    { theme: v.theme, fontFamily: v.fontFamily, fontSize: v.fontSize, lineHeight: v.lineHeight, readerWidth: v.readerWidth, showCharacters: v.showCharacters,
+      showAvatars: typeof v.showAvatars === 'boolean' ? v.showAvatars : defaultPreferences.showAvatars } : { ...defaultPreferences };
   if (!p || !Array.isArray(p.shelves) || p.shelves.length > 10000 || p.shelves.some(s => !s || typeof s.id !== 'string' || s.id.length > 240 || typeof s.name !== 'string' || s.name.length > 200 || !Number.isSafeInteger(s.updatedAt) || s.updatedAt < 0 || (s.deletedAt !== undefined && (!Number.isSafeInteger(s.deletedAt) || s.deletedAt < 0)))) throw new Error('云端分类格式无效。');
   return { preferences, shelves: p.shelves.map(s => ({ id: s.id, name: s.name, updatedAt: s.updatedAt, ...(s.deletedAt === undefined ? {} : { deletedAt: s.deletedAt }) })).sort((a, b) => a.id.localeCompare(b.id)) };
 }
@@ -632,85 +717,104 @@ async function performSync(): Promise<SyncResult> {
       if (data.length < 100) break;
     }
     const remote = new Map(rows.map(r => [r.id, r]));
+    let avatarFailure: AvatarSyncError | undefined;
+    const syncBook = async (bookId: string, operation: () => Promise<void>) => {
+      try { await operation(); }
+      catch (error) {
+        if (!(error instanceof AvatarSyncError)) throw error;
+        avatarFailure ??= error;
+        remote.delete(bookId);
+      }
+    };
     // An account's own prior local snapshot or cloud copy can replace another active local view,
     // but the foreign account's annotations are archived first and never included in this account's upload.
     for (const book of await db.books.toArray()) {
-      const owner = ownerScope((await db.settings.get(ownerKey(book.id)))?.value);
-      if (!owner || owner === context.scope) continue;
-      const saved = await db.settings.get(archiveKey(context.scope, book.id));
-      const row = remote.get(book.id);
-      if (!saved && !row) continue;
-      if (row) validateBundle(row.payload, row.id);
-      const switched = await switchLocalBook(context, book.id, false);
-      if (!saved && row) {
-        await applyBundle(row.payload, context, row.revision, await bundleBook(switched, userId));
-        result.downloaded++;
-        remote.delete(book.id);
-      }
+      await syncBook(book.id, async () => {
+        const owner = ownerScope((await db.settings.get(ownerKey(book.id)))?.value);
+        if (!owner || owner === context.scope) return;
+        const saved = await db.settings.get(archiveKey(context.scope, book.id));
+        const row = remote.get(book.id);
+        if (!saved && !row) return;
+        if (row) validateBundle(row.payload, row.id);
+        const switched = await switchLocalBook(context, book.id, false);
+        if (!saved && row) {
+          await applyBundle(row.payload, context, row.revision, await bundleBook(switched, userId));
+          result.downloaded++;
+          remote.delete(book.id);
+        }
+      });
     }
     const books = await db.books.toArray();
     for (const book of books) {
-      await assertAccount();
-      const owner = ownerScope((await db.settings.get(ownerKey(book.id)))?.value);
-      if (!book.cloudEnabled || owner !== context.scope) { remote.delete(book.id); continue; }
-      const row = remote.get(book.id);
-      if (row) validateBundle(row.payload, row.id);
-      if (row && row.payload.book.deletedAt === undefined) await restoreMissingLocalFile(context, book, row.payload);
-      const local = await bundleBook(book, userId);
-      const link = await readLink(context, book.id);
-      let chosen = local;
-      const localChanged = !link || !equal(local, link.snapshot);
-      if (row && (!link || row.revision !== link.revision)) {
-        const protectIdentity = !row.payload.book.deletedAt && local.characters.some(character => character.identity);
-        if (!localChanged && !protectIdentity) {
-          await applyBundle(row.payload, context, row.revision, local); result.downloaded++; remote.delete(book.id); continue;
-        }
-        chosen = mergeBundles(local, row.payload, link?.snapshot || { ...local, bookmarks: [], characters: [], dialogues: [], corrections: [], jobs: [] });
-        if (!localChanged && equal(chosen, row.payload)) {
-          await applyBundle(row.payload, context, row.revision, local); result.downloaded++; remote.delete(book.id); continue;
-        }
-        result.conflicts++;
-      }
-      let missingRemoteFile = false;
-      if (chosen.book.deletedAt === undefined && chosen.file) {
-        await assertBookAuthorized(context, book.id);
-        const exists = await cloud.storage.from('novel-files').exists(chosen.file.path);
-        if (exists.error && ![400, 404].includes(Number((exists.error as { status?: number }).status))) throw new Error('无法确认云端原文件状态，本机数据已保留。');
-        missingRemoteFile = !exists.data;
-      }
-      if (localChanged || missingRemoteFile || (row && row.revision !== link?.revision)) {
-        const original = chosen.book.deletedAt ? undefined : await db.files.get(book.id);
-        if (!chosen.book.deletedAt && !original) throw new Error('本地原文件缺失。');
-        // Validate both limits before any Storage write, including explicit restoration of a deleted cloud copy.
-        assertCloudUploadLimits(chosen, original?.bytes.size || 0);
-        if (!chosen.book.deletedAt && chosen.file && (!row || !row.payload.file || row.payload.book.deletedAt || missingRemoteFile)) {
-          const fingerprint = [...new Uint8Array(await crypto.subtle.digest('SHA-256', await original!.bytes.arrayBuffer()))].map(n => n.toString(16).padStart(2, '0')).join('');
-          if (fingerprint !== chosen.book.fingerprint) throw new Error('本地原文件指纹校验失败，本次未上传文件。请从备份恢复。');
-          await assertBookAuthorized(context, book.id);
-          const { error: uploadError } = await cloud.storage.from('novel-files').upload(chosen.file.path, original!.bytes, { upsert: true, contentType: 'application/octet-stream' });
-          if (uploadError) throw new Error('原文件上传失败：' + uploadError.message);
-        }
-        await assertBookAuthorized(context, book.id);
-        const revision = await saveRemote(book.id, chosen, row?.revision ?? 0, cloud);
+      await syncBook(book.id, async () => {
         await assertAccount();
-        await applyBundle(chosen, context, revision, local);
-        result.uploaded++;
-      }
-      if (chosen.book.deletedAt && chosen.file) {
-        // Repeat idempotently on every sync so a previous failed Storage deletion is retried.
-        await assertBookAuthorized(context, book.id);
-        const { error: deleteError } = await cloud.storage.from('novel-files').remove([chosen.file.path]);
-        if (deleteError) throw new Error('删除标记已同步，原文件删除失败，请重试。');
-      }
-      remote.delete(book.id);
+        const owner = ownerScope((await db.settings.get(ownerKey(book.id)))?.value);
+        if (!book.cloudEnabled || owner !== context.scope) { remote.delete(book.id); return; }
+        const row = remote.get(book.id);
+        if (row) validateBundle(row.payload, row.id);
+        if (row && row.payload.book.deletedAt === undefined) await restoreMissingLocalFile(context, book, row.payload);
+        const local = await bundleBook(book, userId);
+        const link = await readLink(context, book.id);
+        let chosen = local;
+        const localChanged = !link || !equal(local, link.snapshot);
+        if (row && (!link || row.revision !== link.revision)) {
+          const protectAnnotations = !row.payload.book.deletedAt && (local.characters.some(character => character.identity) || !!local.avatars?.length);
+          if (!localChanged && !protectAnnotations) {
+            await applyBundle(row.payload, context, row.revision, local); result.downloaded++; remote.delete(book.id); return;
+          }
+          chosen = mergeBundles(local, row.payload, link?.snapshot || { ...local, bookmarks: [], characters: [], dialogues: [], corrections: [], jobs: [] });
+          if (!localChanged && equal(chosen, row.payload)) {
+            await applyBundle(row.payload, context, row.revision, local); result.downloaded++; remote.delete(book.id); return;
+          }
+          result.conflicts++;
+        }
+        let missingRemoteFile = false;
+        if (chosen.book.deletedAt === undefined && chosen.file) {
+          await assertBookAuthorized(context, book.id);
+          const exists = await cloud.storage.from('novel-files').exists(chosen.file.path);
+          if (exists.error && ![400, 404].includes(Number((exists.error as { status?: number }).status))) throw new Error('无法确认云端原文件状态，本机数据已保留。');
+          missingRemoteFile = !exists.data;
+        }
+        if (localChanged || missingRemoteFile || (row && row.revision !== link?.revision)) {
+          const original = chosen.book.deletedAt ? undefined : await db.files.get(book.id);
+          if (!chosen.book.deletedAt && !original) throw new Error('本地原文件缺失。');
+          // Validate both limits before any Storage write, including explicit restoration of a deleted cloud copy.
+          assertCloudUploadLimits(chosen, original?.bytes.size || 0);
+          validateAvatarManifest(chosen);
+          const avatars = await stageAvatarRows(chosen, context);
+          if (!chosen.book.deletedAt && chosen.file && (!row || !row.payload.file || row.payload.book.deletedAt || missingRemoteFile)) {
+            const fingerprint = [...new Uint8Array(await crypto.subtle.digest('SHA-256', await original!.bytes.arrayBuffer()))].map(n => n.toString(16).padStart(2, '0')).join('');
+            if (fingerprint !== chosen.book.fingerprint) throw new Error('本地原文件指纹校验失败，本次未上传文件。请从备份恢复。');
+            await assertBookAuthorized(context, book.id);
+            const { error: uploadError } = await cloud.storage.from('novel-files').upload(chosen.file.path, original!.bytes, { upsert: true, contentType: 'application/octet-stream' });
+            if (uploadError) throw new Error('原文件上传失败：' + uploadError.message);
+          }
+          if (avatars.some(avatar => avatar.digest)) await uploadAvatarImages(chosen, avatars, row?.payload, context);
+          await assertBookAuthorized(context, book.id);
+          const revision = await saveRemote(book.id, chosen, row?.revision ?? 0, cloud);
+          await assertAccount();
+          await applyBundle(chosen, context, revision, local, avatars);
+          result.uploaded++;
+        }
+        if (chosen.book.deletedAt && chosen.file) {
+          // Repeat idempotently on every sync so a previous failed Storage deletion is retried.
+          await assertBookAuthorized(context, book.id);
+          const { error: deleteError } = await cloud.storage.from('novel-files').remove([chosen.file.path]);
+          if (deleteError) throw new Error('删除标记已同步，原文件删除失败，请重试。');
+        }
+        remote.delete(book.id);
+      });
     }
     for (const row of remote.values()) {
-      await assertAccount();
-      validateBundle(row.payload, row.id);
-      await applyBundle(row.payload, context, row.revision); result.downloaded++;
+      await syncBook(row.id, async () => {
+        await assertAccount();
+        validateBundle(row.payload, row.id);
+        await applyBundle(row.payload, context, row.revision); result.downloaded++;
+      });
     }
     await assertAccount();
     await syncProfile(context);
+    if (avatarFailure) throw avatarFailure;
     await db.syncState.put({ id: stateId, updatedAt: Date.now(), lastSyncedAt: Date.now() });
     return result;
   } catch (error) {

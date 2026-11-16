@@ -1,5 +1,7 @@
-import type { AnalysisJob, Book, BookFile, Bookmark, Bookshelf, Chapter, Character, CharacterCorrection, Dialogue, ReadingProgress } from '../types';
+import type { AnalysisJob, AvatarRevision, Book, BookFile, Bookmark, Bookshelf, Chapter, Character, CharacterAvatar, CharacterCorrection, Dialogue, ReadingProgress } from '../types';
 import { db } from './db';
+import { MAX_AVATAR_BYTES, validAvatarRevision, validateAvatarImage } from './avatar';
+import { bookAccountScope, bookOwnerKey, bookOwnerScope } from './book-owner';
 import { MAX_FILE_BYTES, parseEpub, parseTxt } from './parser';
 import { mergeCharacterIdentity, validCharacterIdentity, validIdentityGraph } from '../services/character-identity';
 
@@ -83,7 +85,24 @@ interface Backup {
   books: Book[]; files: { bookId: string; name: string; mime: string; base64: string }[];
   chapters: Chapter[]; progress: ReadingProgress[]; bookmarks: Bookmark[]; shelves: Bookshelf[];
   characters: Character[]; dialogues: Dialogue[]; corrections: CharacterCorrection[]; jobs: AnalysisJob[];
+  avatars?: Array<AvatarRevision & { base64?: string }>;
   settings: { id: string; value: unknown }[];
+}
+export interface BackupAccount {
+  origin: string;
+  userId?: string;
+  assertCurrent?: () => void;
+}
+
+async function accessibleBackupBooks(books: Book[], account?: BackupAccount) {
+  account?.assertCurrent?.();
+  if (!account?.userId) return books;
+  const scope = bookAccountScope(account.origin, account.userId);
+  const owners = await db.settings.bulkGet(books.map(book => bookOwnerKey(book.id)));
+  return books.filter((_book, index) => {
+    const owner = bookOwnerScope(owners[index]?.value, account.origin);
+    return !owner || owner === scope;
+  });
 }
 function encodeBase64(bytes: Uint8Array): string {
   const chunks: string[] = [];
@@ -98,15 +117,29 @@ function decodeBase64(data: string): Uint8Array<ArrayBuffer> {
 }
 
 /** Personal backups contain novels. API keys, auth sessions and arbitrary settings are excluded. */
-export async function exportBackup(): Promise<Blob> {
-  const snapshot = await db.transaction('r', db.tables, async () => ({
-    books: await db.books.toArray(), files: await db.files.toArray(), chapters: await db.chapters.toArray(),
-    progress: await db.progress.toArray(), bookmarks: await db.bookmarks.toArray(), shelves: await db.shelves.toArray(),
-    characters: await db.characters.toArray(), dialogues: await db.dialogues.toArray(), corrections: await db.corrections.toArray(),
-    jobs: await db.jobs.toArray(), settings: (await db.settings.toArray()).filter(setting => setting.id === 'preferences'),
-  }));
+export async function exportBackup(account?: BackupAccount): Promise<Blob> {
+  const snapshot = await db.transaction('r', db.tables, async () => {
+    const books = await accessibleBackupBooks(await db.books.toArray(), account);
+    const bookIds = new Set(books.map(book => book.id));
+    const bookData = <T extends { bookId: string }>(rows: T[]) => rows.filter(row => bookIds.has(row.bookId));
+    const characters = bookData(await db.characters.toArray());
+    const characterIds = new Set(characters.map(character => character.id));
+    const settings = await db.settings.get('preferences');
+    return {
+      books, files: bookData(await db.files.toArray()), chapters: bookData(await db.chapters.toArray()),
+      progress: bookData(await db.progress.toArray()), bookmarks: bookData(await db.bookmarks.toArray()), shelves: await db.shelves.toArray(),
+      characters, dialogues: bookData(await db.dialogues.toArray()), corrections: bookData(await db.corrections.toArray()),
+      avatars: bookData(await db.avatars.toArray()).filter(row => characterIds.has(row.characterId)),
+      jobs: bookData(await db.jobs.toArray()), settings: settings ? [settings] : [],
+    };
+  });
   const files = await Promise.all(snapshot.files.map(async file => ({ bookId: file.bookId, name: file.name, mime: file.mime, base64: encodeBase64(new Uint8Array(await file.bytes.arrayBuffer())) })));
-  const backup: Backup = { ...snapshot, files, format: 'open-novel-reader-backup', version: 1, exportedAt: Date.now() };
+  const avatars = await Promise.all(snapshot.avatars.map(async ({ characterId, bookId, updatedAt, revision, digest, image }) => ({
+    characterId, bookId, updatedAt, revision,
+    ...(image && digest ? { digest, base64: encodeBase64(new Uint8Array(await image.arrayBuffer())) } : {}),
+  })));
+  const backup: Backup = { ...snapshot, files, avatars, format: 'open-novel-reader-backup', version: 1, exportedAt: Date.now() };
+  account?.assertCurrent?.();
   return new Blob([JSON.stringify(backup)], { type: 'application/json' });
 }
 
@@ -143,19 +176,29 @@ function validateBackup(value: unknown): Backup {
   for (const row of backup.shelves) if (!object(row) || !id(row.id) || !str(row.name, 200) || !num(row.updatedAt) || (row.deletedAt !== undefined && !num(row.deletedAt))) invalid();
   for (const row of backup.characters) if (!object(row) || !id(row.id) || !bookIds.has(row.bookId) || !str(row.name, 300) || !Array.isArray(row.aliases) || row.aliases.some(name => !str(name, 300)) || !validCharacterIdentity(row.identity)) invalid();
   if (new Set(backup.characters.map(row => row.id)).size !== backup.characters.length || !validIdentityGraph(backup.characters, backup.chapters)) invalid();
+  if (backup.avatars !== undefined) {
+    if (!Array.isArray(backup.avatars) || backup.avatars.length > backup.characters.length) invalid();
+    const owners = new Map(backup.characters.map(row => [row.id, row.bookId]));
+    const seen = new Set<string>();
+    for (const row of backup.avatars) {
+      if (!validAvatarRevision(row) || owners.get(row.characterId) !== row.bookId || seen.has(row.characterId)) invalid();
+      if (row.digest === undefined ? row.base64 !== undefined : !str(row.base64, 4 * Math.ceil(MAX_AVATAR_BYTES / 3)) || !/^(?:[A-Za-z\d+/]{4})*(?:[A-Za-z\d+/]{2}==|[A-Za-z\d+/]{3}=)?$/.test(row.base64)) invalid();
+      seen.add(row.characterId);
+    }
+  }
   for (const row of backup.dialogues) if (!object(row) || !id(row.id) || !locationValid(row) || !num(row.start) || !num(row.end) || row.end < row.start || row.end > chapterById.get(row.chapterId)!.paragraphs[row.paragraphIndex].length || !str(row.text, 100000) || !(row.characterId === null || id(row.characterId)) || !num(row.confidence) || row.confidence > 1 || !['ai', 'manual'].includes(row.source) || !num(row.updatedAt) || (row.speakerLabel !== undefined && !str(row.speakerLabel, 80))) invalid();
   for (const row of backup.corrections) if (!object(row) || !id(row.id) || !id(row.dialogueId) || !bookIds.has(row.bookId) || !(row.characterId === null || id(row.characterId)) || !num(row.updatedAt)) invalid();
   for (const row of backup.jobs) if (!object(row) || !id(row.id) || !bookIds.has(row.bookId) || !chapterIds.has(row.chapterId) || !['queued', 'running', 'paused', 'done', 'failed', 'cancelled'].includes(row.status) || !num(row.completedChunks) || !num(row.totalChunks) || !num(row.updatedAt)) invalid();
   backup.settings = backup.settings.filter(row => {
     if (!object(row) || row.id !== 'preferences' || !object(row.value)) return false;
     const prefs = row.value;
-    return ['light', 'dark', 'sepia'].includes(String(prefs.theme)) && ['serif', 'sans'].includes(String(prefs.fontFamily)) && num(prefs.fontSize) && prefs.fontSize >= 12 && prefs.fontSize <= 48 && num(prefs.lineHeight) && prefs.lineHeight >= 1.2 && prefs.lineHeight <= 3 && num(prefs.readerWidth) && prefs.readerWidth >= 300 && prefs.readerWidth <= 1600 && typeof prefs.showCharacters === 'boolean';
+    return ['light', 'dark', 'sepia'].includes(String(prefs.theme)) && ['serif', 'sans'].includes(String(prefs.fontFamily)) && num(prefs.fontSize) && prefs.fontSize >= 12 && prefs.fontSize <= 48 && num(prefs.lineHeight) && prefs.lineHeight >= 1.2 && prefs.lineHeight <= 3 && num(prefs.readerWidth) && prefs.readerWidth >= 300 && prefs.readerWidth <= 1600 && typeof prefs.showCharacters === 'boolean' && (prefs.showAvatars === undefined || typeof prefs.showAvatars === 'boolean');
   });
   return backup;
 }
 
 /** Validate everything before the transaction; merge into the library without deleting other books. */
-export async function restoreBackup(file: File): Promise<void> {
+export async function restoreBackup(file: File, account?: BackupAccount): Promise<void> {
   if (file.size > 256 * 1024 * 1024) throw new Error('备份超过 256 MB。请分批备份或导入原始书籍。');
   let raw: unknown;
   try { raw = JSON.parse(await file.text()); } catch { invalid(); }
@@ -167,10 +210,28 @@ export async function restoreBackup(file: File): Promise<void> {
     const fingerprint = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', await source.bytes.arrayBuffer())), n => n.toString(16).padStart(2, '0')).join('');
     if (bookById.get(source.bookId)?.fingerprint !== fingerprint) invalid();
   }
+  const avatars: CharacterAvatar[] = [];
+  for (const { characterId, bookId, updatedAt, revision, digest, base64 } of backup.avatars ?? []) {
+    const row = { characterId, bookId, updatedAt, revision };
+    if (digest && base64) {
+      const image = new Blob([decodeBase64(base64)], { type: 'image/png' });
+      try { if (await validateAvatarImage(image) !== digest) invalid(); } catch { invalid(); }
+      avatars.push({ ...row, image, digest });
+    } else {
+      if (digest) invalid();
+      avatars.push(row);
+    }
+  }
   await db.transaction('rw', db.tables, async () => {
+    if ((await accessibleBackupBooks(backup.books, account)).length !== backup.books.length) {
+      throw new Error('备份包含本机另一账号拥有的书籍。请切回原账号恢复。现有数据未被修改。');
+    }
     for (const book of backup.books) {
       const existing = await db.books.get(book.id);
       if (!existing || existing.updatedAt <= book.updatedAt) await db.books.put({ ...book, cloudEnabled: false });
+      if (account?.userId) {
+        await db.settings.put({ id: bookOwnerKey(book.id), value: bookAccountScope(account.origin, account.userId) });
+      }
     }
     if (files.length) await db.files.bulkPut(files);
     if (backup.chapters.length) await db.chapters.bulkPut(backup.chapters);
@@ -201,6 +262,12 @@ export async function restoreBackup(file: File): Promise<void> {
       if (!validIdentityGraph([...mergedCharacters.values()], chapters)) invalid();
       await db.characters.bulkPut(changed);
     }
+    // A backup can fill a missing avatar. Preserve an existing image or intentional reset.
+    if (avatars.length) {
+      const current = await db.avatars.bulkGet(avatars.map(row => row.characterId));
+      if (current.some((row, index) => row && row.bookId !== avatars[index].bookId)) invalid();
+      await db.avatars.bulkPut(avatars.filter((_, index) => !current[index]));
+    }
     for (const dialogue of backup.dialogues) {
       const current = await db.dialogues.get(dialogue.id);
       if (!current || (current.updatedAt <= dialogue.updatedAt && !(current.source === 'manual' && dialogue.source === 'ai'))) await db.dialogues.put(dialogue);
@@ -214,6 +281,7 @@ export async function restoreBackup(file: File): Promise<void> {
       if (!current || current.updatedAt <= job.updatedAt) await db.jobs.put({ ...job, status: job.status === 'running' ? 'paused' : job.status });
     }
     for (const setting of backup.settings) if (!(await db.settings.get(setting.id))) await db.settings.put(setting);
+    account?.assertCurrent?.();
     await db.syncState.put({ id: 'local', updatedAt: Date.now() });
   });
 }

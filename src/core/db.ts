@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie';
-import type { AnalysisJob, Book, BookFile, Bookmark, Bookshelf, Chapter, Character, CharacterCorrection, Dialogue, ReadingProgress, SyncState } from '../types';
+import type { AnalysisJob, Book, BookFile, Bookmark, Bookshelf, Chapter, Character, CharacterAvatar, CharacterCorrection, Dialogue, ReadingProgress, SyncState } from '../types';
 
 export interface Setting { id: string; value: unknown }
 
@@ -12,6 +12,7 @@ export class ReaderDatabase extends Dexie {
   bookmarks!: Table<Bookmark, string>;
   shelves!: Table<Bookshelf, string>;
   characters!: Table<Character, string>;
+  avatars!: Table<CharacterAvatar, string>;
   dialogues!: Table<Dialogue, string>;
   corrections!: Table<CharacterCorrection, string>;
   jobs!: Table<AnalysisJob, string>;
@@ -34,6 +35,7 @@ export class ReaderDatabase extends Dexie {
       settings: 'id',
       syncState: 'id, updatedAt',
     });
+    this.version(2).stores({ avatars: 'characterId, bookId' });
   }
 }
 

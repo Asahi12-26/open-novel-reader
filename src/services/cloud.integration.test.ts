@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto';
 import { Blob as NodeBlob, File as NodeFile } from 'node:buffer';
 import { webcrypto } from 'node:crypto';
+import { crc32, deflateSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BookBundle } from './cloud';
 import type { ReaderDatabase as Database } from '../core/db';
@@ -12,6 +13,7 @@ vi.mock('../core/db', async importOriginal => {
 });
 vi.mock('@supabase/supabase-js', () => ({ createClient: (_url: string, _key: string, options?: { global?: { headers?: { Authorization?: string } } }) => state.cloud!.client(options?.global?.headers?.Authorization?.replace('Bearer ', '')) }));
 import { db, ReaderDatabase } from '../core/db';
+import { resetCharacterAvatar, validateAvatarImage } from '../core/avatar';
 import { importBook, listChapters, saveProgress, deleteBook, exportBackup, restoreBackup } from '../core/library';
 import { CLOUD_BUNDLE_MAX_BYTES, CLOUD_FILE_MAX_BYTES, configureCloud, filterBooksForAccount, prepareLocalBookForAccount, prepareLocalProfileForAccount, setBookCloud, syncLibrary } from './cloud';
 import { initializeCharacterIdentity, manualAddAlias } from './character-identity';
@@ -32,6 +34,11 @@ class MemoryTransport {
   records = new Map<string, Map<string, TransportRow>>();
   profiles = new Map<string, { payload: { preferences: typeof defaultPreferences; shelves: { id: string; name: string; updatedAt: number; deletedAt?: number }[] }; revision: number }>();
   files = new Map<string, Blob>();
+  avatarFiles = new Map<string, Blob>();
+  avatarUploads = 0;
+  avatarDownloads = 0;
+  beforeNextAvatarUpload?: () => Promise<void>;
+  afterNextAvatarDownload?: () => Promise<void>;
   uploads = 0;
   afterNextSave?: () => Promise<void>;
   beforeNextGetUser?: () => Promise<void>;
@@ -86,7 +93,19 @@ class MemoryTransport {
         await callback?.();
         return { data: revision, error: null };
       },
-      storage: { from: () => ({
+      storage: { from: (bucket: string) => bucket === 'character-avatars' ? {
+        upload: async (path: string, bytes: Blob) => {
+          const callback = this.beforeNextAvatarUpload; this.beforeNextAvatarUpload = undefined; await callback?.();
+          if (!path.startsWith(user() + '/') || this.avatarFiles.has(path)) return { error: { message: 'NOT_ALLOWED_OR_EXISTS' } };
+          this.avatarUploads++; this.avatarFiles.set(path, bytes); return { error: null };
+        },
+        download: async (path: string) => {
+          this.avatarDownloads++;
+          const data = path.startsWith(user() + '/') && this.avatarFiles.get(path) || null;
+          const callback = this.afterNextAvatarDownload; this.afterNextAvatarDownload = undefined; await callback?.();
+          return { data, error: data ? null : { message: 'NOT_FOUND' } };
+        },
+      } : ({
         exists: async (path: string) => ({ data: this.files.has(path), error: null }),
         upload: async (path: string, bytes: Blob) => { this.files.set(path, bytes); this.uploads++; const callback = this.afterNextUpload; this.afterNextUpload = undefined; await callback?.(); return { error: null }; },
         download: async (path: string) => { const result = { data: this.files.get(path), error: this.files.has(path) ? null : { message: 'NOT_FOUND' } }; const callback = this.afterNextDownload; this.afterNextDownload = undefined; await callback?.(); return result; },
@@ -102,6 +121,27 @@ vi.stubGlobal('crypto', webcrypto);
 let deviceA: Database; let deviceB: Database; let transport: MemoryTransport;
 const story = '第一章 初见\n“你好。”小雨说。\n窗外的花开了。\n第二章 归途\n我们一起回家。';
 const novel = () => new File([story], '小雨.txt', { type: 'text/plain' });
+async function setPortrait(bookId: string, characterId: string, tone: number) {
+  const pngChunk = (type: string, bytes: Buffer) => {
+    const header = Buffer.alloc(8); header.writeUInt32BE(bytes.length); header.write(type, 4);
+    const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(Buffer.concat([header.subarray(4), bytes])));
+    return Buffer.concat([header, bytes, crc]);
+  };
+  const dimensions = Buffer.alloc(13); dimensions.writeUInt32BE(256); dimensions.writeUInt32BE(256, 4);
+  dimensions[8] = 8; dimensions[9] = 6;
+  const pixels = Buffer.alloc(256 * 1025, tone);
+  for (let index = 0; index < pixels.length; index += 1025) pixels[index] = 0;
+  const image = new Blob([new Uint8Array(Buffer.concat([
+    Buffer.from('89504e470d0a1a0a', 'hex'), pngChunk('IHDR', dimensions),
+    pngChunk('IDAT', deflateSync(pixels)), pngChunk('IEND', Buffer.alloc(0)),
+  ]))], { type: 'image/png' });
+  const digest = await validateAvatarImage(image);
+  const previous = await db.avatars.get(characterId);
+  const row = { bookId, characterId, image, digest, revision: crypto.randomUUID(), updatedAt: Math.max(Date.now(), (previous?.updatedAt ?? 0) + 1) };
+  await db.characters.put({ bookId, id: characterId, name: '小雨', aliases: ['雨姑娘'] });
+  await db.avatars.put(row);
+  return row;
+}
 beforeEach(async () => {
   transport = new MemoryTransport(); state.cloud = transport;
   deviceA = new ReaderDatabase('sync-device-a-' + crypto.randomUUID());
@@ -117,6 +157,120 @@ async function consentAndUpload() {
 }
 
 describe('two-device client synchronization with an offline transport', () => {
+  it('uploads only after per-book consent and syncs verified Blob bytes and reset revisions on two devices', async () => {
+    const { id } = await importBook(novel());
+    const initial = await setPortrait(id, 'rain', 129);
+    await syncLibrary();
+    expect(transport.avatarUploads).toBe(0);
+    expect(transport.rows().size).toBe(0);
+    await setBookCloud(id, true);
+    await syncLibrary();
+    expect(transport.avatarUploads).toBe(1);
+    expect(transport.rows().get(id)?.payload.avatars).toEqual([{
+      bookId: id, characterId: 'rain', revision: initial.revision, updatedAt: initial.updatedAt, digest: initial.digest,
+    }]);
+    expect([...transport.avatarFiles.keys()]).toEqual([`account-a/${id}/initial/${initial.digest}.png`]);
+    state.database = deviceB;
+    await syncLibrary();
+    expect(transport.avatarDownloads).toBe(1);
+    const downloaded = await db.avatars.get('rain');
+    expect(downloaded?.revision).toBe(initial.revision);
+    await expect(validateAvatarImage(downloaded!.image!)).resolves.toBe(initial.digest);
+    await syncLibrary();
+    expect(transport.avatarDownloads).toBe(1);
+    expect(transport.avatarUploads).toBe(1);
+    await resetCharacterAvatar(id, 'rain');
+    await syncLibrary();
+    state.database = deviceA;
+    await syncLibrary();
+    expect((await db.avatars.get('rain'))?.image).toBeUndefined();
+    expect(transport.rows().get(id)?.payload.avatars?.[0].digest).toBeUndefined();
+    expect(transport.avatarUploads).toBe(1);
+  });
+
+  it('keeps avatar rows isolated when importing the same novel and archives the first account offline', async () => {
+    const book = await consentAndUpload();
+    const first = await setPortrait(book.id, 'shared-id', 156);
+    await syncLibrary();
+    transport.currentUser = 'account-b';
+    await syncLibrary();
+    expect(await filterBooksForAccount(await db.books.toArray(), 'account-b')).toEqual([]);
+    await importBook(novel(), imported => prepareLocalBookForAccount(imported.id, 'account-b'));
+    expect(await db.avatars.get('shared-id')).toBeUndefined();
+    const second = await setPortrait(book.id, 'shared-id', 176);
+    await setBookCloud(book.id, true);
+    await syncLibrary();
+    expect(transport.rows('account-b').get(book.id)?.payload.avatars?.[0].digest).toBe(second.digest);
+    expect(transport.rows('account-a').get(book.id)?.payload.avatars?.[0].digest).toBe(first.digest);
+    transport.currentUser = 'account-a';
+    await prepareLocalBookForAccount(book.id, 'account-a');
+    expect((await db.avatars.get('shared-id'))?.digest).toBe(first.digest);
+    await expect(validateAvatarImage((await db.avatars.get('shared-id'))!.image!)).resolves.toBe(first.digest);
+  });
+
+  it('preserves the local portrait when a new cloud portrait fails verification', async () => {
+    const book = await consentAndUpload();
+    const original = await setPortrait(book.id, 'rain', 145);
+    await syncLibrary();
+    state.database = deviceB;
+    await syncLibrary();
+    state.database = deviceA;
+    const newer = await setPortrait(book.id, 'rain', 195);
+    await syncLibrary();
+    transport.avatarFiles.set(`account-a/${book.id}/initial/${newer.digest}.png`, new Blob(['bad bytes'], { type: 'image/png' }));
+    state.database = deviceB;
+    const other = await importBook(new File(['第一章 另一本书\n内容仍然可以同步。'], '另一本.txt'));
+    await setBookCloud(other.id, true);
+    await expect(syncLibrary()).rejects.toThrow('头像下载或内容校验失败');
+    expect((await db.avatars.get('rain'))?.digest).toBe(original.digest);
+    await expect(validateAvatarImage((await db.avatars.get('rain'))!.image!)).resolves.toBe(original.digest);
+    expect(transport.rows().has(other.id)).toBe(true);
+  });
+
+  it('stops additional portrait uploads and metadata after consent is revoked in flight', async () => {
+    const book = await consentAndUpload();
+    await setPortrait(book.id, 'first-draw', 141);
+    await setPortrait(book.id, 'next-draw', 178);
+    transport.beforeNextAvatarUpload = () => setBookCloud(book.id, false);
+    await expect(syncLibrary()).rejects.toThrow('上传许可已取消');
+    expect((await db.books.get(book.id))?.cloudEnabled).toBe(false);
+    expect(transport.avatarUploads).toBe(1);
+    expect(transport.rows().get(book.id)?.payload.avatars).toBeUndefined();
+    expect(await db.avatars.where('bookId').equals(book.id).count()).toBe(2);
+    await syncLibrary();
+    expect(transport.avatarUploads).toBe(1);
+    await setBookCloud(book.id, true);
+    await syncLibrary();
+    expect(transport.avatarUploads).toBe(2);
+    expect(transport.rows().get(book.id)?.payload.avatars).toHaveLength(2);
+  });
+
+  it('keeps avatar edits made during metadata CAS and resynchronizes the latest revision', async () => {
+    const book = await consentAndUpload();
+    const first = await setPortrait(book.id, 'rain', 144);
+    let newerDigest = '';
+    transport.afterNextSave = async () => { newerDigest = (await setPortrait(book.id, 'rain', 200)).digest; };
+    await syncLibrary();
+    expect((await db.avatars.get('rain'))?.digest).toBe(newerDigest);
+    expect(transport.rows().get(book.id)?.payload.avatars?.[0].digest).toBe(first.digest);
+    await syncLibrary();
+    expect(transport.rows().get(book.id)?.payload.avatars?.[0].digest).toBe(newerDigest);
+  });
+
+  it('retains a compatible avatar manifest when a legacy device omits it', async () => {
+    const book = await consentAndUpload();
+    const first = await setPortrait(book.id, 'rain', 143);
+    await syncLibrary();
+    const cloud = transport.rows().get(book.id)!;
+    const payload = { ...cloud.payload, avatars: undefined, book: { ...cloud.payload.book, title: '旧设备修改的标题', updatedAt: Date.now() + 10 } };
+    transport.rows().set(book.id, { ...cloud, revision: cloud.revision + 1, payload });
+    await syncLibrary();
+    expect((await db.books.get(book.id))?.title).toBe('旧设备修改的标题');
+    expect((await db.avatars.get('rain'))?.digest).toBe(first.digest);
+    expect(transport.rows().get(book.id)?.payload.avatars?.[0].digest).toBe(first.digest);
+    expect(transport.avatarUploads).toBe(1);
+  });
+
   it('requires file opt-in, downloads verified original bytes, and separates metadata from progress', async () => {
     const book = await importBook(novel());
     await syncLibrary(); expect(transport.uploads).toBe(0); expect(transport.rows().size).toBe(0);
