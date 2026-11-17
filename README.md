@@ -6,18 +6,18 @@
 
 ## 当前版本与下载
 
-**V0.5.0-beta.1** 新增人物头像、正文头像和人物卡片，Android versionCode 为 5001。阅读页「人物管理」可上传及裁剪本地图片，也可查看别名、出场位置、身份历史和相关对白。 [人物头像使用指南](docs/CHARACTER_AVATARS.md)
+**V0.6.0-beta.1** 加入书籍系列、跨书人物关联、剧情证据和已读章节简介。新版整书任务先保存剧情理解，再识别对白。Android versionCode 为 6001。 [V0.6 使用与离线质量对照](docs/V06_STORY_MEMORY.md)
 
 当前使用 Supabase 内置团队测试邮件，正式公网注册和完整密码找回暂不开放。已有测试账号可在三个平台登录；自建与配置步骤见 [云服务配置](docs/CLOUD_SETUP.md)。
 
 | 平台 | 本轮状态 | 使用入口 |
 | --- | --- | --- |
 | Web / PWA | 在线版 | [在线使用](https://asahi12-26.github.io/open-novel-reader/) |
-| Windows x64 | 安装包未配置发布者签名 | [下载 EXE](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.5.0-beta.1/Open-Novel-Reader_0.5.0-beta.1_windows-x64-setup.exe) |
-| Android ARM64 | 复用固定发布证书 | [下载 APK](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.5.0-beta.1/Open-Novel-Reader_0.5.0-beta.1_android-arm64.apk) |
+| Windows x64 | 安装包未配置发布者签名 | [下载 EXE](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.6.0-beta.1/Open-Novel-Reader_0.6.0-beta.1_windows-x64-setup.exe) |
+| Android ARM64 | 复用固定发布证书 | [下载 APK](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.6.0-beta.1/Open-Novel-Reader_0.6.0-beta.1_android-arm64.apk) |
 | iOS | 保留共享架构，尚无 IPA 构建 | 需要 macOS 和签名条件 |
 
-发布附件含校验文件和第三方许可。Android 0.2 起沿用固定发布证书，可覆盖安装。仍在使用 Android 0.1 开发签名版的用户，先在旧版导出书库，再安装新版并恢复。 [使用指南](docs/USAGE.md) · [V0.5 Beta 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.5.0-beta.1)
+发布附件含校验文件和第三方许可。Android 0.2 起沿用固定发布证书，可覆盖安装。仍在使用 Android 0.1 开发签名版的用户，先在旧版导出书库，再安装新版并恢复。 [使用指南](docs/USAGE.md) · [V0.6 Beta 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.6.0-beta.1)
 
 ## 现在可以用什么
 
@@ -28,6 +28,7 @@
 - Supabase 邮箱确认 / 登录、逐书上传、原文件 / 书架 / 进度 / 书签 / 设置同步、断网恢复与账号隔离；本人测试项目已部署，也支持自己的云服务。
 - DeepSeek 逐章选择、对白识别、人物归属和结果保存流程；预算估计、每次授权、分片暂停 / 取消 / 断点重试、未知人物、人工纠正、人物新建 / 改名 / 合并。代理已部署，原创短文真实推理及人工确认保存通过，复杂人物质量仍待扩展验证。
 - 整书分析支持已读范围和全书范围。任务与预算保存在本机，重启后重新授权即可从检查点继续。阅读页默认隐藏未来身份，人工纠错始终优先。V0.4 的真实整书模型质量待独立评估。 [质量样本与验证](docs/AI_QUALITY.md)
+- 阅读页「人物管理」可上传及裁剪本地头像，查看别名、出场位置、身份历史和相关对白。 [人物头像使用指南](docs/CHARACTER_AVATARS.md)
 
 原创短章 Flash 真实推理最小验证通过：完成 1/1 分片，3 句对白全部归属到 2 名人物，0 未知，1 处人工确认重新打开后仍保存。测试结束已清除会话内存密钥；整本书与复杂人物的识别准确率仍待扩展验证，后续收费调用需另行授权。 正式 SMTP 与 Leaked Password Protection 留待开放公网注册前配置；后者当前仅 Pro 及以上套餐支持，本项目保持免费套餐。EPUB 当前按文本阅读，暂不呈现插图、富文本强调或出版商 CSS；不支持 DRM、漫画和固定版式 EPUB。
 

@@ -1,0 +1,136 @@
+.chapter-summary {
+  margin-block: 2rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  text-align: start;
+  font-family: system-ui, sans-serif;
+}
+
+.chapter-summary > summary {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 9px;
+  padding: 12px 16px;
+  color: var(--green);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.chapter-summary > summary::after {
+  content: '⌄';
+  margin-inline-start: auto;
+  transition: transform .16s ease;
+}
+
+.chapter-summary[open] > summary::after { transform: rotate(180deg); }
+.chapter-summary > summary::-webkit-details-marker { display: none; }
+.chapter-summary > .chapter-summary-content { margin: 0 16px 16px; }
+
+.chapter-summary-content {
+  min-width: 0;
+  text-align: start;
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.plot-note, .plot-overview-meta, .plot-event-meta { color: var(--muted); }
+.plot-note { margin: 0; }
+.plot-overview-meta, .plot-event-meta, .plot-persons, .plot-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.plot-overview-meta, .plot-event-meta { font-size: 11px; }
+.chapter-summary-content .plot-overview-text {
+  margin-block: 9px 12px;
+  font-family: "Noto Serif SC", SimSun, Georgia, serif;
+  font-size: 15px;
+  white-space: pre-wrap;
+}
+
+.plot-persons { margin-block: 8px; }
+.plot-persons button {
+  min-width: 32px;
+  min-height: 32px;
+  padding-inline: 9px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--green);
+  background: var(--green-light);
+  font-size: 12px;
+}
+
+.plot-events h3 { margin: 14px 0 8px; font-size: 14px; }
+.plot-events ol, .plot-revisions { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.plot-event {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--sidebar);
+}
+
+.plot-event p { margin: 5px 0; font-size: 13px; }
+.plot-event > small, .plot-revisions small { color: var(--muted); }
+.plot-kind { padding: 2px 6px; border-radius: 4px; color: var(--green); background: var(--green-light); }
+.plot-kind.claim, .plot-kind.inference, .plot-warning { color: var(--accent); }
+.plot-evidence { margin-block: 6px; color: var(--muted); font-size: 12px; }
+.plot-evidence summary { width: fit-content; min-height: 32px; padding-block: 5px; cursor: pointer; }
+.plot-evidence blockquote { margin: 2px 0 7px; padding: 6px 10px; border-inline-start: 2px solid var(--accent); }
+.plot-revisions li { display: grid; gap: 3px; padding: 7px; border-block-start: 1px solid var(--line); }
+.plot-revisions button { justify-self: start; min-height: 32px; }
+
+.plot-actions button { min-height: 36px; }
+.plot-edit { display: grid; gap: 8px; margin-block: 8px; }
+.plot-edit label { display: grid; gap: 5px; }
+.plot-edit :is(input, textarea) {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: inherit;
+  background: var(--surface);
+  font: inherit;
+}
+
+.plot-edit textarea { resize: vertical; }
+.plot-regenerate { margin-top: 10px; min-height: 40px; }
+
+.chapter-recap-index {
+  display: grid;
+  margin-top: 12px;
+  padding-block-start: 10px;
+  border-block-start: 1px solid var(--line);
+}
+
+.chapter-recap-index > strong {
+  margin: 5px 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.dialogue-revisions {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.dialogue-revisions summary { cursor: pointer; }
+.dialogue-revisions li { padding-block: 4px; }
+.dialogue-revisions time { display: block; }
+
+@media (max-width: 650px) {
+  .chapter-summary > summary { padding-inline: 11px; }
+  .chapter-summary > .chapter-summary-content { margin-inline: 11px; }
+  .plot-edit :is(input, textarea) { font-size: 16px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chapter-summary > summary::after { transition: none; }
+}

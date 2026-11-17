@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto';
 import { Blob as NodeBlob, File as NodeFile } from 'node:buffer';
 import { webcrypto } from 'node:crypto';
 import { crc32, deflateSync } from 'node:zlib';
+import Dexie from 'dexie';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BookBundle } from './cloud';
 import type { ReaderDatabase as Database } from '../core/db';
@@ -18,6 +19,7 @@ import { importBook, listChapters, saveProgress, deleteBook, exportBackup, resto
 import { CLOUD_BUNDLE_MAX_BYTES, CLOUD_FILE_MAX_BYTES, configureCloud, filterBooksForAccount, prepareLocalBookForAccount, prepareLocalProfileForAccount, setBookCloud, syncLibrary } from './cloud';
 import { initializeCharacterIdentity, manualAddAlias } from './character-identity';
 import { defaultPreferences } from '../types';
+import { seriesBookId } from '../core/series-types';
 
 interface TransportRow { id: string; payload: BookBundle; revision: number }
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
@@ -157,6 +159,106 @@ async function consentAndUpload() {
 }
 
 describe('two-device client synchronization with an offline transport', () => {
+  it('keeps an unapproved series volume and its evidence out of the approved volume, and restores story data on a second device', async () => {
+    const first = await consentAndUpload();
+    const other = await importBook(new File(['第一章 外传\n另一册私有原文。'], '外传.txt', { type: 'text/plain' }));
+    await prepareLocalBookForAccount(other.id, 'account-a');
+    const scope = 'https://sync-test.supabase.co|account-a';
+    const seriesId = crypto.randomUUID();
+    await db.series.put({ id: seriesId, scope, name: '渡口系列', updatedAt: 1 });
+    for (const [index, book] of [first, other].entries()) {
+      await db.seriesBooks.put({ id: seriesBookId(seriesId, book.id), scope, seriesId, bookId: book.id, position: index, updatedAt: 2 });
+      const [chapter] = await listChapters(book.id);
+      const text = chapter.paragraphs[0];
+      await db.plotEvents.put({
+        id: `${chapter.id}:event`, bookId: book.id, chapterId: chapter.id, seriesId,
+        order: { chapterIndex: 0, paragraphIndex: 0, offset: 0 },
+        revisions: [{ id: crypto.randomUUID(), description: index ? '私有剧情不能跟随另一册' : '公开同步选择内的剧情', characterIds: [],
+          kind: 'fact', source: 'ai', status: 'active', confidence: .9, updatedAt: 5,
+          evidence: { chapterId: chapter.id, paragraphIndex: 0, start: 0, end: text.length, text },
+          visibleAt: { chapterIndex: 0, paragraphIndex: 0, offset: text.length } }],
+      });
+    }
+    await syncLibrary();
+    expect(transport.rows().has(other.id)).toBe(false);
+    const row = transport.rows().get(first.id)!;
+    const payload = row.payload;
+    expect(payload.story?.memberships.map(row => row.bookId)).toEqual([first.id]);
+    expect(JSON.stringify(payload)).not.toContain('私有剧情');
+    expect(JSON.stringify(payload)).not.toContain(other.id);
+    // A legacy client's metadata update can omit the optional extension.
+    const { story: _legacyField, ...legacyPayload } = payload;
+    transport.rows().set(first.id, { ...row, revision: row.revision + 1, payload: legacyPayload });
+    await syncLibrary();
+    expect(transport.rows().get(first.id)?.payload.story).toEqual(payload.story);
+    transport.currentUser = 'account-b';
+    expect((await filterBooksForAccount(await db.books.toArray(), 'account-b')).map(book => book.id)).not.toContain(first.id);
+    const otherAccount = { origin: 'https://sync-test.supabase.co', userId: 'account-b' };
+    const otherBackup = await (await exportBackup(otherAccount)).text();
+    expect(otherBackup).not.toContain('渡口系列');
+    expect(otherBackup).not.toContain('公开同步选择内的剧情');
+    await prepareLocalBookForAccount(first.id, 'account-b');
+    expect(await db.plotEvents.where('bookId').equals(first.id).count()).toBe(0);
+    await setBookCloud(first.id, true);
+    await syncLibrary();
+    expect(transport.rows().get(first.id)?.payload.story).toBeUndefined();
+    transport.currentUser = 'account-a';
+    await syncLibrary();
+    expect(await db.plotEvents.where('bookId').equals(first.id).count()).toBe(1);
+    state.database = deviceB;
+    await syncLibrary();
+    expect(await db.plotEvents.where('bookId').equals(first.id).count()).toBe(1);
+    expect(await db.series.get(seriesId)).toMatchObject({ scope, name: '渡口系列' });
+    const backup = await exportBackup({ origin: 'https://sync-test.supabase.co', userId: 'account-a' });
+    expect(await backup.text()).not.toContain('account-a');
+    await deviceB.delete();
+    await deviceB.open();
+    await restoreBackup(new File([backup], '小说备份.json'));
+    expect(await db.plotEvents.where('bookId').equals(first.id).count()).toBe(1);
+    expect(await db.series.get(seriesId)).toMatchObject({ scope: 'local', name: '渡口系列' });
+  });
+
+  it('upgrades a populated V0.5 database without changing book, character, avatar, progress or correction records', async () => {
+    const legacy = new Dexie(deviceA.name);
+    legacy.version(1).stores({
+      books: 'id, fingerprint, updatedAt, shelfId', files: 'bookId', chapters: 'id, bookId, [bookId+index]',
+      progress: 'bookId, updatedAt', bookmarks: 'id, bookId, chapterId', shelves: 'id, updatedAt',
+      characters: 'id, bookId', dialogues: 'id, bookId, chapterId', corrections: 'id, bookId, dialogueId',
+      jobs: 'id, bookId, chapterId, status', settings: 'id', syncState: 'id, updatedAt',
+    });
+    legacy.version(2).stores({ avatars: 'characterId, bookId' });
+    const bookId = 'older-book';
+    const chapterId = 'older-chapter';
+    const characterId = 'older-character';
+    const position = { chapterIndex: 0, paragraphIndex: 0, offset: 0 };
+    const portrait = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' });
+    const character = initializeCharacterIdentity({ id: characterId, bookId, name: '小雨', aliases: [] }, position);
+    const progress = { bookId, chapterId, paragraphIndex: 0, offset: 2, updatedAt: 2, version: 1 };
+    const bookmark = { id: 'older-bookmark', bookId, chapterId, paragraphIndex: 0, label: '旧书签', createdAt: 3 };
+    const correction = { id: 'older-correction', bookId, dialogueId: 'older-line', characterId, updatedAt: 4 };
+    try {
+      await legacy.open();
+      expect(legacy.verno).toBe(2);
+      await legacy.table('books').put({ id: bookId, title: '旧书', updatedAt: 1 });
+      await legacy.table('characters').put(character);
+      await legacy.table('avatars').put({ characterId, bookId, image: portrait, revision: 'older-avatar', updatedAt: 5 });
+      await legacy.table('progress').put(progress);
+      await legacy.table('bookmarks').put(bookmark);
+      await legacy.table('corrections').put(correction);
+    } finally { legacy.close(); }
+    await deviceA.open();
+    expect(deviceA.verno).toBe(3);
+    expect(await db.books.get(bookId)).toMatchObject({ id: bookId, title: '旧书', updatedAt: 1 });
+    expect(await db.characters.get(characterId)).toEqual(character);
+    const avatar = await db.avatars.get(characterId);
+    expect(avatar?.revision).toBe('older-avatar');
+    expect(new Uint8Array(await avatar!.image!.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
+    expect(await db.progress.get(bookId)).toEqual(progress);
+    expect(await db.bookmarks.get(bookmark.id)).toEqual(bookmark);
+    expect(await db.corrections.get(correction.id)).toEqual(correction);
+    expect(await db.plotEvents.count()).toBe(0);
+    expect(await db.series.count()).toBe(0);
+  });
   it('uploads only after per-book consent and syncs verified Blob bytes and reset revisions on two devices', async () => {
     const { id } = await importBook(novel());
     const initial = await setPortrait(id, 'rain', 129);

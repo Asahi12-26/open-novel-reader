@@ -1,5 +1,10 @@
 import { readBoundedJSON } from '../_shared/bounded-request.ts';
 import { AI_COST_MARGIN, AI_MODELS, AI_OUTPUT_LIMIT, AI_SYSTEM_PROMPT, AI_BOOK_SYSTEM_PROMPT, AI_TOKEN_OVERHEAD, MAX_AI_REQUEST_COST_USD } from '../_shared/ai-contract.ts';
+import {
+  exactStoryEvidence, STORY_IDENTITY_PROTOCOL, STORY_IDENTITY_SYSTEM_PROMPT, STORY_PLOT_PROTOCOL,
+  STORY_PLOT_SYSTEM_PROMPT, validStoryPlotInput, validStoryPlotOutput, validStorySpeechInput, validStorySpeechRows,
+} from '../_shared/story-contract.ts';
+import type { StoryPlotInput, StorySpeechInput } from '../_shared/story-contract.ts';
 
 export const DEFAULT_AI_ORIGINS = [
   'https://asahi12-26.github.io', 'https://tauri.localhost', 'http://tauri.localhost', 'tauri://localhost',
@@ -46,34 +51,15 @@ function validInput(value: unknown, deep = false): value is JsonObject {
   return true;
 }
 
-function analysisResponse(value: unknown, input?: IdentityInput): JsonObject | null {
+function analysisResponse(value: unknown, input?: IdentityInput, plot?: StoryPlotInput, story?: StorySpeechInput): JsonObject | null {
   if (!object(value) || !Array.isArray(value.choices) || value.choices.length !== 1) return null;
   const choice = value.choices[0];
   if (!object(choice) || !['stop', 'length', 'content_filter'].includes(String(choice.finish_reason)) || !object(choice.message) || typeof choice.message.content !== 'string' || choice.message.content.length > 65536) return null;
   if (choice.finish_reason === 'stop') {
     let parsed: unknown;
     try { parsed = JSON.parse(choice.message.content); } catch { return null; }
-    if (!object(parsed) || !Array.isArray(parsed.dialogues) || parsed.dialogues.length > 12) return null;
-    const knownIds = new Set(input?.known.map(row => row.id));
-    const requestedIds = new Set(input?.dialogues.map(row => row.id));
-    if (input && (!only(parsed, ['dialogues', 'identities']) || parsed.dialogues.length !== requestedIds.size)) return null;
-    const ids = new Set<string>();
-    for (const row of parsed.dialogues) {
-      if (!object(row) || !cleanText(row.id, 512) || ids.has(row.id) || (row.speaker !== null && !cleanText(row.speaker, 80)) || typeof row.confidence !== 'number' || !Number.isFinite(row.confidence) || row.confidence < 0 || row.confidence > 1) return null;
-      ids.add(row.id);
-      if (input && (!only(row, ['id', 'speaker', 'characterId', 'confidence']) || !requestedIds.has(row.id) || (row.characterId !== null && (typeof row.characterId !== 'string' || !knownIds.has(row.characterId))))) return null;
-    }
-    if (input) {
-      if (!Array.isArray(parsed.identities) || parsed.identities.length > 12) return null;
-      for (const proposal of parsed.identities) {
-        if (!object(proposal) || !only(proposal, ['characterId', 'kind', 'value', 'targetId', 'evidence', 'confidence']) || !cleanText(proposal.characterId, 512) || !knownIds.has(proposal.characterId) || !['alias', 'merge'].includes(String(proposal.kind)) || typeof proposal.confidence !== 'number' || !Number.isFinite(proposal.confidence) || proposal.confidence < 0 || proposal.confidence > 1) return null;
-        if (proposal.kind === 'alias' ? !cleanText(proposal.value, 80) || proposal.targetId !== undefined : !cleanText(proposal.targetId, 512) || !knownIds.has(proposal.targetId) || proposal.value !== undefined) return null;
-        const evidence = proposal.evidence;
-        if (!object(evidence) || !only(evidence, ['paragraphIndex', 'start', 'end', 'text']) || !integer(evidence.paragraphIndex) || !integer(evidence.start) || !integer(evidence.end) || !cleanText(evidence.text, 1200) || evidence.end - evidence.start !== evidence.text.length) return null;
-        const context = input.context.find(row => row.paragraph === evidence.paragraphIndex);
-        if (!context || evidence.start < context.start || context.text.slice(evidence.start - context.start, evidence.end - context.start) !== evidence.text) return null;
-      }
-    }
+    if (plot && !validStoryPlotOutput(parsed, plot)) return null;
+    if (!plot && !validIdentityOutput(parsed, input, story)) return null;
   }
   const result: JsonObject = { choices: [{ finish_reason: choice.finish_reason, message: { content: choice.message.content } }] };
   if (object(value.usage)) {
@@ -82,6 +68,34 @@ function analysisResponse(value: unknown, input?: IdentityInput): JsonObject | n
     if (Object.keys(usage).length) result.usage = usage;
   }
   return result;
+}
+
+function validIdentityOutput(parsed: unknown, input?: IdentityInput, story?: StorySpeechInput): boolean {
+  if (!object(parsed) || !Array.isArray(parsed.dialogues) || parsed.dialogues.length > 12) return false;
+  const deep = input ?? story;
+  if (deep && !only(parsed, ['dialogues', 'identities'])) return false;
+  if (story && !validStorySpeechRows(parsed.dialogues, story)) return false;
+  if (!story) {
+    const knownIds = new Set(input?.known.map(row => row.id));
+    const requestedIds = new Set(input?.dialogues.map(row => row.id));
+    if (input && parsed.dialogues.length !== requestedIds.size) return false;
+    const ids = new Set<string>();
+    for (const row of parsed.dialogues) {
+      if (!object(row) || !cleanText(row.id, 512) || ids.has(row.id) || (row.speaker !== null && !cleanText(row.speaker, 80)) || typeof row.confidence !== 'number' || !Number.isFinite(row.confidence) || row.confidence < 0 || row.confidence > 1) return false;
+      ids.add(row.id);
+      if (input && (!only(row, ['id', 'speaker', 'characterId', 'confidence']) || !requestedIds.has(row.id) || (row.characterId !== null && (typeof row.characterId !== 'string' || !knownIds.has(row.characterId))))) return false;
+    }
+  }
+  if (deep) {
+    const knownIds = new Set(deep.known.map(row => row.id));
+    if (!Array.isArray(parsed.identities) || parsed.identities.length > 12) return false;
+    for (const proposal of parsed.identities) {
+      if (!object(proposal) || !only(proposal, ['characterId', 'kind', 'value', 'targetId', 'evidence', 'confidence']) || !cleanText(proposal.characterId, 512) || !knownIds.has(proposal.characterId) || !['alias', 'merge'].includes(String(proposal.kind)) || typeof proposal.confidence !== 'number' || !Number.isFinite(proposal.confidence) || proposal.confidence < 0 || proposal.confidence > 1) return false;
+      if (proposal.kind === 'alias' ? !cleanText(proposal.value, 80) || proposal.targetId !== undefined : !cleanText(proposal.targetId, 512) || !knownIds.has(proposal.targetId) || proposal.value !== undefined) return false;
+      if (!exactStoryEvidence(proposal.evidence, deep.context)) return false;
+    }
+  }
+  return true;
 }
 
 /** No provider calls happen on OPTIONS/status/failed validation. No retries or secret logging. */
@@ -125,17 +139,20 @@ export function createDeepseekProxy(deps: ProxyDependencies): (request: Request)
       if (!['status', 'models', 'analyze'].includes(String(body.action))) return reply({ error: 'INVALID_ACTION' }, 400);
       if (body.action === 'status') {
         if (!only(body, ['action'])) return reply({ error: 'INVALID_STATUS' }, 400);
-        return reply({ ready: true, models: AI_MODELS.map(model => model.id), limits: { maxTokens: AI_OUTPUT_LIMIT, maxRequestCostUsd: MAX_AI_REQUEST_COST_USD }, upstreamChecked: false, protocols: ['identity-v1'] });
+        return reply({ ready: true, models: AI_MODELS.map(model => model.id), limits: { maxTokens: AI_OUTPUT_LIMIT, maxRequestCostUsd: MAX_AI_REQUEST_COST_USD }, upstreamChecked: false, protocols: ['identity-v1', STORY_PLOT_PROTOCOL, STORY_IDENTITY_PROTOCOL] });
       }
       if (typeof body.apiKey !== 'string' || !/^[A-Za-z0-9._-]{10,256}$/.test(body.apiKey)) return reply({ error: 'INVALID_KEY' }, 400);
       let upstreamBody: string | undefined;
       if (body.action === 'analyze') {
         if (body.authorized !== true) return reply({ error: 'CONSENT_REQUIRED' }, 403);
-        if (!only(body, ['action', 'apiKey', 'authorized', 'model', 'maxTokens', 'system', 'input', 'maxCostUsd', 'protocol']) || (body.protocol !== undefined && body.protocol !== 'identity-v1')) return reply({ error: 'INVALID_ANALYSIS' }, 400);
+        if (!only(body, ['action', 'apiKey', 'authorized', 'model', 'maxTokens', 'system', 'input', 'maxCostUsd', 'protocol']) || (body.protocol !== undefined && (typeof body.protocol !== 'string' || !['identity-v1', STORY_PLOT_PROTOCOL, STORY_IDENTITY_PROTOCOL].includes(body.protocol)))) return reply({ error: 'INVALID_ANALYSIS' }, 400);
         const deep = body.protocol === 'identity-v1';
-        const system = deep ? AI_BOOK_SYSTEM_PROMPT : AI_SYSTEM_PROMPT;
+        const plot = body.protocol === STORY_PLOT_PROTOCOL;
+        const story = body.protocol === STORY_IDENTITY_PROTOCOL;
+        const system = plot ? STORY_PLOT_SYSTEM_PROMPT : story ? STORY_IDENTITY_SYSTEM_PROMPT : deep ? AI_BOOK_SYSTEM_PROMPT : AI_SYSTEM_PROMPT;
         const model = AI_MODELS.find(model => model.id === body!.model);
-        if (!model || typeof body.maxTokens !== 'number' || !Number.isInteger(body.maxTokens) || body.maxTokens < 1 || body.maxTokens > AI_OUTPUT_LIMIT || body.system !== system || !validInput(body.input, deep)) return reply({ error: 'INVALID_ANALYSIS' }, 400);
+        const inputValid = plot ? validStoryPlotInput(body.input) : story ? validStorySpeechInput(body.input) : validInput(body.input, deep);
+        if (!model || typeof body.maxTokens !== 'number' || !Number.isInteger(body.maxTokens) || body.maxTokens < 1 || body.maxTokens > AI_OUTPUT_LIMIT || body.system !== system || !inputValid) return reply({ error: 'INVALID_ANALYSIS' }, 400);
         const input = JSON.stringify(body.input);
         const inputBytes = encoder.encode(system + input).length + AI_TOKEN_OVERHEAD;
         const upperCost = (inputBytes * model.inputPerMillion + body.maxTokens * model.outputPerMillion) / 1_000_000 * AI_COST_MARGIN;
@@ -161,7 +178,9 @@ export function createDeepseekProxy(deps: ProxyDependencies): (request: Request)
       if (body.action === 'models') {
         if (!object(value) || !Array.isArray(value.data) || value.data.length > 100) return reply({ error: 'INVALID_UPSTREAM_RESPONSE' }, 502);
         result = { data: value.data.filter(model => object(model) && AI_MODELS.some(allowedModel => allowedModel.id === model.id)).map(model => ({ id: (model as JsonObject).id })) };
-      } else result = analysisResponse(value, body.protocol === 'identity-v1' ? body.input as IdentityInput : undefined);
+      } else result = analysisResponse(value, body.protocol === 'identity-v1' ? body.input as IdentityInput : undefined,
+        body.protocol === STORY_PLOT_PROTOCOL ? body.input as StoryPlotInput : undefined,
+        body.protocol === STORY_IDENTITY_PROTOCOL ? body.input as StorySpeechInput : undefined);
       if (!result || JSON.stringify(result).includes(body.apiKey)) return reply({ error: 'INVALID_UPSTREAM_RESPONSE' }, 502);
       return reply(result);
     } catch { return reply({ error: controller.signal.aborted ? 'UPSTREAM_TIMEOUT_OR_NETWORK_ERROR' : 'PROXY_UNAVAILABLE' }, 504); }

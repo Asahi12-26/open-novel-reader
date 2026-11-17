@@ -10,22 +10,39 @@ interface MockRequest { input: { chapter: string; known: { id: string; name: str
 
 async function mockAccount(page: Page, context: BrowserContext) {
   const requests: MockRequest[] = [];
+  const plotRequests: { chapter: string; context: { paragraph: number; start: number; text: string }[] }[] = [];
   await context.route('https://api.deepseek.com/**', route => route.abort('blockedbyclient'));
   await context.route(`${project}/**`, async route => {
     const url = new URL(route.request().url());
     if (url.pathname === '/functions/v1/deepseek-proxy') {
       const body = route.request().postDataJSON();
-      if (body.action === 'status') return route.fulfill({ json: { ready: true, protocols: ['identity-v1'], upstreamChecked: false, models: ['deepseek-flash', 'deepseek-v4-pro'], limits: { maxTokens: 4096, maxRequestCostUsd: 0.1 } } });
+      if (body.action === 'status') return route.fulfill({ json: { ready: true, protocols: ['identity-v1', 'plot-v1', 'story-identity-v1'], upstreamChecked: false, models: ['deepseek-flash', 'deepseek-v4-pro'], limits: { maxTokens: 4096, maxRequestCostUsd: 0.1 } } });
       expect(body.action).toBe('analyze');
       expect(body.authorized).toBe(true);
       expect(body.maxCostUsd).toBeLessThanOrEqual(.1);
+      const { input } = body;
+      const answer = (value: unknown) => route.fulfill({ json: { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(value) } }] } });
+      const quote = (row: { paragraph: number; start: number; text: string }) => {
+        const text = row.text.slice(0, 120);
+        return { paragraphIndex: row.paragraph, start: row.start, end: row.start + text.length, text };
+      };
+      if (body.protocol === 'plot-v1') {
+        plotRequests.push(input);
+        const evidence = quote(input.context[0]);
+        return answer({ summary: input.chapter.includes('远行') ? '远行简介 · 指南针' : '渡口记忆 · 地图计划',
+          events: [{ kind: 'claim', confidence: .98, description: '记录人物明确说出的计划', characters: [], evidence }] });
+      }
+      expect(plotRequests.some(row => row.chapter === input.chapter)).toBe(true);
       requests.push(body);
       if (requests.length === 3) return route.fulfill({ status: 503, json: { error: 'OFFLINE_BOOK_FIXTURE_FAILURE' } });
       const speaker = String(body.input.chapter).includes('远行') ? 'Mara' : '林青';
       const knownId = body.input.known.find((person: { name: string }) => person.name === speaker)?.id || null;
       const identityText = '林青又名青鸟。';
       const identities = String(body.input.chapter).includes('约定') && knownId ? [{ characterId: knownId, kind: 'alias', value: '青鸟', evidence: { paragraphIndex: 0, start: 0, end: identityText.length, text: identityText }, confidence: .97 }] : [];
-      return route.fulfill({ json: { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ dialogues: body.input.dialogues.map((item: { id: string }) => ({ id: item.id, speaker, characterId: knownId, confidence: .97 })), identities }) } }] } });
+      return answer({ dialogues: input.dialogues.map((item: { id: string; paragraphIndex: number }) => ({
+        id: item.id, speaker, characterId: knownId, confidence: .97, speech: true,
+        evidence: quote(input.context.find((line: { paragraph: number }) => line.paragraph === item.paragraphIndex)),
+      })), identities });
     }
     if (url.pathname === '/auth/v1/user') return route.fulfill({ json: { id: userId, aud: 'authenticated', role: 'authenticated', email: 'offline-book@example.invalid', app_metadata: { provider: 'email', providers: ['email'] }, user_metadata: {}, created_at: new Date().toISOString() } });
     if (url.pathname.startsWith('/rest/v1/')) return route.fulfill({ json: [] });
@@ -38,7 +55,7 @@ async function mockAccount(page: Page, context: BrowserContext) {
     localStorage.setItem('onr.cloud.public-config', JSON.stringify({ url: project, anonKey: publicKey }));
     localStorage.setItem('onr.auth.offline-book.supabase.co', JSON.stringify({ access_token: token, refresh_token: 'offline-book-refresh', token_type: 'bearer', expires_in: 3600, expires_at: expires, user: { id: userId, aud: 'authenticated', role: 'authenticated', email: 'offline-book@example.invalid', app_metadata: { provider: 'email', providers: ['email'] }, user_metadata: {}, created_at: new Date().toISOString() } }));
   }, { project, publicKey, userId });
-  return requests;
+  return { requests, plotRequests };
 }
 
 async function loadKey(page: Page) {
@@ -60,7 +77,7 @@ async function openBookPanel(page: Page) {
 
 test('whole-book consent advances chapters, restores checkpoints, protects manual edits and hides future characters', async ({ page, context }) => {
   test.setTimeout(100_000);
-  const requests = await mockAccount(page, context);
+  const { requests, plotRequests } = await mockAccount(page, context);
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/');
   const prose = Array.from({ length: 16 }, (_, i) => `第${i + 1}段。${'这是用于检查阅读位置的原创安静段落，没有人物对白。'.repeat(5)}`).join('\n\n');
@@ -76,6 +93,7 @@ test('whole-book consent advances chapters, restores checkpoints, protects manua
   await expect(panel.getByText('全书范围', { exact: true })).toBeVisible();
   await expect(panel.getByRole('combobox', { name: '整书分析范围', exact: true })).toHaveValue('deep');
   expect(requests).toHaveLength(0);
+  expect(plotRequests).toHaveLength(0);
   await panel.getByRole('checkbox', { name: '授权整书任务', exact: true }).check();
   await panel.getByRole('button', { name: '授权并开始整书分析', exact: true }).click();
   await expect(panel.getByText('任务已安全停止', { exact: true })).toBeVisible();
@@ -119,6 +137,7 @@ test('whole-book consent advances chapters, restores checkpoints, protects manua
   reader = page.getByRole('dialog', { name: `阅读 ${bookName}`, exact: true });
   await expect(reader.locator('.character-tag.manual')).toHaveCount(1);
   await expect(reader.getByRole('button', { name: '说话人物：未知，点击纠正', exact: true }).first()).toBeVisible();
+  await expect(reader.getByText('远行简介 · 指南针', { exact: true })).toHaveCount(0);
   await reader.getByRole('button', { name: '人物管理', exact: true }).click();
   const people = page.getByRole('dialog', { name: '书中的人物', exact: true });
   const futurePerson = people.getByRole('button', { name: '查看人物 Mara', exact: true });
@@ -136,7 +155,7 @@ test('whole-book consent advances chapters, restores checkpoints, protects manua
   await people.getByRole('button', { name: '关闭', exact: true }).click();
   await page.getByRole('button', { name: '查看整书任务', exact: true }).click();
   panel = page.getByRole('dialog', { name: '整本书深度分析', exact: true });
-  await page.screenshot({ path: 'artifacts/qa/v04-book-analysis-offline-results.png' });
+  await page.screenshot({ path: 'artifacts/qa/v06-book-analysis-offline-results.png' });
 
   // A new, explicitly authorized reading-session task can wait without fees and follow scrolling.
   await panel.getByRole('button', { name: '新建整书任务', exact: true }).click();

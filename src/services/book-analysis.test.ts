@@ -3,9 +3,10 @@ import { webcrypto } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { db } from '../core/db';
 import type { Book, Chapter } from '../types';
-import { clearAIKey, setAIKey } from './ai';
+import { clearAIKey, correctDialogue, extractStoryDialogues, setAIKey } from './ai';
 import { analyzeBook, estimateBookAnalysis, getBookAnalysisJob, listBookAnalysisJobs } from './book-analysis';
 import type { BookAnalysisController, BookAnalysisJob, BookAnalysisOptions } from './book-analysis-types';
+import { storyAttributions, storySpeechInput } from './book-story';
 
 const cloud = vi.hoisted(() => ({
   config: { url: 'https://book-runner.example.invalid', anonKey: 'sb_publishable_offline_fixture' },
@@ -26,7 +27,7 @@ const book: Book = {
   coverColor: '#123456', fingerprint: 'offline-book-fixture', totalWords: 50, chapterCount: 2,
   createdAt: 1, updatedAt: 1, cloudEnabled: false,
 };
-const options: BookAnalysisOptions = { bookId: book.id, model: 'deepseek-flash', mode: 'deep', budgetUsd: 0.08, authorized: true };
+const options: BookAnalysisOptions = { bookId: book.id, model: 'deepseek-flash', mode: 'deep', budgetUsd: 0.08, authorized: true, pipeline: 'identity-v1' };
 const chapters: Chapter[] = [
   { id: 'book-fixture-ch1', bookId: book.id, index: 0, title: '第一章', paragraphs: ['林青说：“我们走。”'] },
   { id: 'book-fixture-ch2', bookId: book.id, index: 1, title: '第二章', paragraphs: ['林青说：“我们到了。”'] },
@@ -89,8 +90,8 @@ afterEach(async () => {
   for (const task of tasks) task.cancel();
   await Promise.allSettled(tasks.map(task => task.done));
   // Clearing only the test process's fake IndexedDB singleton.
-  await db.transaction('rw', [db.books, db.chapters, db.progress, db.characters, db.dialogues, db.corrections, db.jobs, db.settings], async () => {
-    await Promise.all([db.books.clear(), db.chapters.clear(), db.progress.clear(), db.characters.clear(), db.dialogues.clear(), db.corrections.clear(), db.jobs.clear(), db.settings.clear()]);
+  await db.transaction('rw', [db.books, db.chapters, db.progress, db.characters, db.dialogues, db.corrections, db.jobs, db.settings, db.plotEvents, db.chapterSummaries, db.dialogueCorrectionRevisions], async () => {
+    await Promise.all([db.books.clear(), db.chapters.clear(), db.progress.clear(), db.characters.clear(), db.dialogues.clear(), db.corrections.clear(), db.jobs.clear(), db.settings.clear(), db.plotEvents.clear(), db.chapterSummaries.clear(), db.dialogueCorrectionRevisions.clear()]);
   });
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -117,7 +118,7 @@ describe('whole-book analysis authorization and checkpointing (offline)', () => 
   it('persists a failed charge reservation, requires renewed consent and resumes only unfinished work', async () => {
     await seed();
     const proxy = mockProxy(2);
-    const estimate = await estimateBookAnalysis(book.id, options.model, 'deep');
+    const estimate = await estimateBookAnalysis(book.id, options.model, 'deep', { pipeline: 'identity-v1' });
     expect(estimate).toMatchObject({ totalChunks: 2, maxRequests: 4, estimatedMinUsd: 0 });
     expect(fetch).not.toHaveBeenCalled();
     const failed = await start().done;
@@ -236,5 +237,157 @@ describe('whole-book analysis authorization and checkpointing (offline)', () => 
     } finally { task.cancel(); }
     expect((await task.done).status).toBe('cancelled');
     expect(cloud.listeners.size).toBe(0);
+  });
+});
+
+describe('story-first book analysis pipeline (offline)', () => {
+  function mockStory(failAt?: number) {
+    const calls: {
+      input: { chapter: string; context: { paragraph: number; start: number; text: string }[];
+        known: { id: string; name: string }[]; dialogues?: { id: string; text: string }[];
+        memory: { bookId: string; description: string }[]; manual?: { id: string; characterId: string | null }[] };
+      protocol: string; maxCostUsd: number;
+    }[] = [];
+    vi.mocked(fetch).mockImplementation(async (url, init) => {
+      expect(url).toBe(`${cloud.config.url}/functions/v1/deepseek-proxy`);
+      const request = JSON.parse(String(init?.body));
+      if (request.action === 'status') return Response.json({
+        ready: true, protocols: ['identity-v1', 'plot-v1', 'story-identity-v1'],
+      });
+      expect(request).toMatchObject({ action: 'analyze', authorized: true, apiKey: key });
+      calls.push(request);
+      if (calls.length === failAt) return Response.json({ error: 'offline interruption' }, { status: 503 });
+      const input = request.input as typeof calls[number]['input'];
+      const context = input.context[0];
+      const evidence = { paragraphIndex: context.paragraph, start: context.start, end: context.start + context.text.length, text: context.text };
+      const person = input.known.find(row => row.name === '林青');
+      const output = request.protocol === 'plot-v1' ? {
+        summary: '林青开口说话。', events: [{ description: '林青开口说话', characters: person ? [person.id] : [], kind: 'claim', confidence: .95, evidence }],
+      } : {
+        dialogues: input.dialogues?.map(row => ({ id: row.id, speech: true,
+          speaker: '林青', characterId: person?.id ?? null, evidence, confidence: .94 })), identities: [],
+      };
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(output) } }] });
+    });
+    return calls;
+  }
+
+  it('records bounded plot before attributing speakers and skips completed plot and speech on resume', async () => {
+    await seed();
+    const calls = mockStory(3);
+    const estimate = await estimateBookAnalysis(book.id, options.model, 'deep');
+    expect(estimate).toMatchObject({ plotRequests: 2, totalChunks: 2, reviewRequests: 2, maxRequests: 6 });
+    expect(fetch).not.toHaveBeenCalled();
+    const first = await start({ pipeline: 'story-v1' }).done;
+    expect(first).toMatchObject({ status: 'failed', pipeline: 'story-v1', completedChunks: 1, completedPlotRequests: 1 });
+    expect(calls.map(call => [call.protocol, call.input.chapter])).toEqual([
+      ['plot-v1', '第一章'], ['story-identity-v1', '第一章'], ['plot-v1', '第二章'],
+    ]);
+    expect(calls[1].input.memory).toEqual(expect.arrayContaining([expect.objectContaining({ bookId: book.id, description: '林青开口说话' })]));
+    expect(await db.chapterSummaries.count()).toBe(1);
+    expect(await db.plotEvents.count()).toBe(1);
+    expect(await db.dialogues.count()).toBe(1);
+    await expect(start({ pipeline: 'story-v1', jobId: first.id, seriesMemory: [{ bookId: 'changed-book', through: { chapterIndex: 1, paragraphIndex: 0, offset: 1 } }] }).done).rejects.toThrow(/预算记录/);
+    expect(calls).toHaveLength(3);
+    const second = await start({ pipeline: 'story-v1', jobId: first.id }).done;
+    expect(second).toMatchObject({ status: 'done', completedChunks: 2, completedPlotRequests: 2 });
+    expect(calls.slice(3).map(call => [call.protocol, call.input.chapter])).toEqual([['plot-v1', '第二章'], ['story-identity-v1', '第二章']]);
+    expect(second.reservedUsd).toBeCloseTo(calls.reduce((total, call) => total + call.maxCostUsd, 0), 10);
+    expect(second.reservedUsd).toBeLessThanOrEqual(second.budgetUsd);
+    expect(await db.chapterSummaries.count()).toBe(2);
+    expect(await db.plotEvents.count()).toBe(2);
+    expect(new Set((await db.dialogues.toArray()).map(dialogue => dialogue.characterId)).size).toBe(1);
+  });
+
+  it('uses only the explicitly targeted chapter for recap regeneration', async () => {
+    await seed();
+    const calls = mockStory();
+    const target = chapters[1].id;
+    await readTo(chapters[1], chapters[1].paragraphs[0].length - 1, 1);
+    await expect(estimateBookAnalysis(book.id, options.model, 'deep', { summaryChapterId: target })).rejects.toThrow('读完目标章节');
+    await expect(start({ pipeline: 'story-v1', summaryChapterId: target }).done).rejects.toThrow('读完目标章节');
+    expect(fetch).not.toHaveBeenCalled();
+    await readTo(chapters[1], chapters[1].paragraphs[0].length, 2);
+    const estimate = await estimateBookAnalysis(book.id, options.model, 'deep', { summaryChapterId: target });
+    expect(estimate).toMatchObject({ chapterCount: 1, plotRequests: 1, totalChunks: 0, maxRequests: 1 });
+    const task = await start({ pipeline: 'story-v1', summaryChapterId: target }).done;
+    expect(task).toMatchObject({ status: 'done', summaryChapterId: target, completedPlotRequests: 1, completedChunks: 0 });
+    expect(calls.map(call => [call.protocol, call.input.chapter])).toEqual([['plot-v1', '第二章']]);
+    expect(await db.chapterSummaries.get(target)).toBeTruthy();
+    expect(await db.chapterSummaries.get(chapters[0].id)).toBeUndefined();
+    expect(await db.dialogues.count()).toBe(0);
+  });
+
+  it('uses prior manual evidence and preserves the correction and its history on reanalysis', async () => {
+    await seed();
+    const calls = mockStory();
+    expect((await start({ pipeline: 'story-v1' }).done).status).toBe('done');
+    const [line] = await db.dialogues.where('chapterId').equals(chapters[0].id).toArray();
+    await correctDialogue(line.id, null);
+    expect((await start({ pipeline: 'story-v1' }).done).status).toBe('done');
+    expect(calls[5].input.manual).toEqual([{ id: line.id, characterId: null }]);
+    expect(await db.dialogues.get(line.id)).toMatchObject({ source: 'manual', characterId: null });
+    expect(await db.dialogueCorrectionRevisions.where('dialogueId').equals(line.id).toArray())
+      .toEqual([expect.objectContaining({ previousCharacterId: line.characterId, characterId: null })]);
+  });
+
+  it('never sends future text or unscoped series memory from a reading-progress job', async () => {
+    const read = chapters[0].paragraphs[0];
+    const first = { ...chapters[0], paragraphs: [`${read}尚未读到的剧情。`, '未来段落。'] };
+    await seed([first, chapters[1]]);
+    await readTo(first, read.length, 1);
+    const calls = mockStory();
+    let latest: BookAnalysisJob | undefined;
+    const task = start({ pipeline: 'story-v1', mode: 'reading-progress',
+      seriesMemory: [{ bookId: 'foreign-book', through: { chapterIndex: 4, paragraphIndex: 0, offset: 2 } }],
+      onProgress: state => { latest = state; } });
+    await vi.waitFor(() => expect(latest?.status).toBe('waiting'), { timeout: 3000 });
+    expect(calls.map(call => [call.protocol, call.input.context.map(row => row.text)])).toEqual([
+      ['plot-v1', [read]], ['story-identity-v1', [read]],
+    ]);
+    expect(calls.every(call => call.input.memory.every(item => item.bookId === book.id))).toBe(true);
+    const serialized = JSON.stringify(calls);
+    expect(serialized).not.toMatch(/尚未读到|未来段落|foreign-book/);
+    task.cancel();
+    await task.done;
+  });
+});
+
+describe('story speaker evidence (offline)', () => {
+  it('keeps same-name IDs unresolved without a unique alias in the local evidence', () => {
+    const chapter = { ...chapters[0], paragraphs: [
+      'Harbor Alex said, “Wait.”', 'Alex said, “Go.”', 'Alex said, “Fine.”',
+      'Harbor Alex faced Station Alex as someone said, “Stop.”',
+    ] };
+    const candidates = extractStoryDialogues(chapter);
+    const input = storySpeechInput(chapter, candidates, [
+      { id: 'harbor', name: 'Alex', aliases: ['Harbor Alex'], bookId: book.id },
+      { id: 'station', name: 'Alex', aliases: ['Station Alex'], bookId: book.id },
+    ]);
+    const dialogues = candidates.map((line, index) => ({
+      id: line.id, speech: true, speaker: 'Alex', characterId: index === 2 ? null : 'harbor', confidence: .98,
+      evidence: { paragraphIndex: index, start: 0, end: line.start, text: chapter.paragraphs[index].slice(0, line.start) },
+    }));
+    expect(storyAttributions({ dialogues }, candidates, input)).toMatchObject([
+      { speaker: 'Alex', characterId: 'harbor' },
+      { speaker: null, characterId: null, possibleCharacterIds: ['harbor', 'station'] },
+      { speaker: null, characterId: null, possibleCharacterIds: ['harbor', 'station'] },
+      { speaker: null, characterId: null, possibleCharacterIds: ['harbor', 'station'] },
+    ]);
+  });
+
+  it('shares a new ID only for the same evidence anchor and rejects mere name substrings', () => {
+    const chapter = { ...chapters[0], paragraphs: ['Alex said, “Wait.” “Look.”', 'A different Alex said, “Go.”', 'Alexandra wrote “Note.”'] };
+    const candidates = extractStoryDialogues(chapter);
+    const [first] = candidates;
+    const input = storySpeechInput(chapter, candidates, []);
+    const dialogues = candidates.map((line, index) => {
+      const end = index <= 1 ? first.start : line.start;
+      return {
+        id: line.id, speech: true, speaker: index === 1 ? 'ALEX' : 'Alex', characterId: null, confidence: .98,
+        evidence: { paragraphIndex: line.paragraphIndex, start: 0, end, text: chapter.paragraphs[line.paragraphIndex].slice(0, end) },
+      };
+    });
+    expect(storyAttributions({ dialogues }, candidates, input).map(row => row.speaker)).toEqual(['Alex', 'Alex', null, null]);
   });
 });

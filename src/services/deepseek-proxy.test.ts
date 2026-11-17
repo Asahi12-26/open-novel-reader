@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDeepseekProxy, type ProxyDependencies } from '../../supabase/functions/deepseek-proxy/handler';
 import { AI_BOOK_SYSTEM_PROMPT, AI_MODELS, AI_SYSTEM_PROMPT } from '../../supabase/functions/_shared/ai-contract';
+import { STORY_IDENTITY_PROTOCOL, STORY_IDENTITY_SYSTEM_PROMPT, STORY_PLOT_PROTOCOL, STORY_PLOT_SYSTEM_PROMPT } from '../../supabase/functions/_shared/story-contract';
 
 // Only the dependency-injected handler is imported: Deno.serve and real provider fetch never run.
 const ORIGIN = 'https://asahi12-26.github.io';
@@ -47,7 +48,7 @@ describe('DeepSeek proxy auth and origin boundary (offline only)', () => {
   it('checks authenticated readiness without a provider key or network request', async () => {
     const { handler, upstream, authenticate } = fixture();
     const response = await handler(request({ action: 'status' }));
-    expect(await response.json()).toEqual({ ready: true, models: AI_MODELS.map(model => model.id), limits: { maxTokens: 4096, maxRequestCostUsd: 0.10 }, upstreamChecked: false, protocols: ['identity-v1'] });
+    expect(await response.json()).toEqual({ ready: true, models: AI_MODELS.map(model => model.id), limits: { maxTokens: 4096, maxRequestCostUsd: 0.10 }, upstreamChecked: false, protocols: ['identity-v1', STORY_PLOT_PROTOCOL, STORY_IDENTITY_PROTOCOL] });
     expect(authenticate).toHaveBeenCalledWith('fixture-user-jwt', expect.any(AbortSignal)); expect(upstream).not.toHaveBeenCalled();
   });
   it('sanitizes auth outages and rejects non-JSON/methods without provider calls', async () => {
@@ -135,6 +136,89 @@ describe('identity-v1 deep analysis protocol (fake upstream only)', () => {
       const { handler } = fixture({ fetch: upstream as typeof fetch });
       const response = await handler(request(deep()));
       expect(response.status, JSON.stringify(value)).toBe(502);
+      expect(await response.json()).toEqual({ error: 'INVALID_UPSTREAM_RESPONSE' });
+      expect(upstream).toHaveBeenCalledOnce();
+    }
+  });
+});
+
+describe('story protocols (fake upstream only)', () => {
+  const text = '林青说：“你好。”';
+  const context = [{ paragraph: 0, start: 0, text }];
+  const evidence = { paragraphIndex: 0, start: 0, end: 3, text: '林青说' };
+  const known = [{ id: 'local-character', name: '林青', aliases: [] }];
+  const common = { chapter: '第一章', context, known, memory: [] };
+  const plot = { ...analysis(), protocol: STORY_PLOT_PROTOCOL, system: STORY_PLOT_SYSTEM_PROMPT, input: { ...common, language: 'zh' } };
+  const dialogue = { ...candidate, start: text.indexOf(candidate.text), end: text.length };
+  const speech = { ...analysis(), protocol: STORY_IDENTITY_PROTOCOL, system: STORY_IDENTITY_SYSTEM_PROMPT, input: {
+    ...common, dialogues: [dialogue], manual: [{ id: dialogue.id, characterId: known[0].id }],
+  } };
+  const event = { description: '林青打招呼', characters: [known[0].id], kind: 'claim', confidence: .9, evidence };
+  const plotOutput = { summary: '林青打了招呼。', events: [event] };
+  const remembered = {
+    eventId: 'prior-chapter:event:0:0:5:0', bookId: 'fixture-book', chapterIndex: 0,
+    description: '林青没有发声', kind: 'claim', confidence: .8,
+    evidence: { paragraphIndex: 0, start: 0, end: 5, text: '林青未发声' },
+  };
+  const speechRow = { id: dialogue.id, speech: true, speaker: null, characterId: null, confidence: .3, evidence: null, possibleCharacterIds: [known[0].id] };
+  const speechOutput = { dialogues: [speechRow], identities: [] };
+  const fixtureReply = (data: unknown) => vi.fn(async () => Response.json(answer({
+    choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(data) } }],
+  })));
+
+  it('accepts evidence-bound plot and unknown speakers with candidate IDs', async () => {
+    for (const [body, output] of [[plot, plotOutput], [speech, speechOutput]] as const) {
+      const upstream = fixtureReply(output);
+      const { handler } = fixture({ fetch: upstream as typeof fetch });
+      const response = await handler(request(body));
+      expect(response.status).toBe(200);
+      expect(JSON.parse((await response.json()).choices[0].message.content)).toEqual(output);
+      expect(upstream).toHaveBeenCalledOnce();
+    }
+  });
+
+  it('accepts plot conflict links only to distinct supplied memory event IDs', async () => {
+    const body = { ...plot, input: { ...plot.input, memory: [remembered] } };
+    for (const [links, expectedStatus] of [
+      [[remembered.eventId], 200],
+      [[remembered.eventId, remembered.eventId], 502],
+      [['outside-memory'], 502],
+    ] as const) {
+      const output = { ...plotOutput, events: [{ ...event, conflictsWith: links }] };
+      const upstream = fixtureReply(output);
+      const { handler } = fixture({ fetch: upstream as typeof fetch });
+      const response = await handler(request(body));
+      expect(response.status).toBe(expectedStatus);
+      expect(upstream).toHaveBeenCalledOnce();
+    }
+  });
+
+  it('rejects wrong prompts, malformed quotes, foreign correction IDs and oversized memory before contacting the provider', async () => {
+    const { handler, upstream } = fixture();
+    const memory = { bookId: 'fixture-book', chapterIndex: 0, kind: 'fact', confidence: 1, description: '林青打招呼', evidence };
+    for (const input of [
+      { ...plot, system: AI_SYSTEM_PROMPT },
+      { ...plot, input: { ...plot.input, memory: Array(13).fill(memory) } },
+      { ...speech, input: { ...speech.input, manual: [{ id: dialogue.id, characterId: 'foreign-character' }] } },
+      { ...speech, input: { ...speech.input, dialogues: [{ ...dialogue, start: 0 }] } },
+      { ...speech, input: { ...speech.input, memory: [{ ...memory, sourceText: 'whole book' }] } },
+    ]) {
+      expect((await handler(request(input))).status).toBe(400);
+    }
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it('rejects fabricated source evidence and foreign IDs without retrying', async () => {
+    for (const [body, output] of [
+      [plot, { ...plotOutput, events: [{ ...event, evidence: { ...evidence, text: '不存在' } }] }],
+      [plot, { ...plotOutput, events: [{ ...event, kind: 'user' }] }],
+      [speech, { ...speechOutput, dialogues: [{ ...speechRow, possibleCharacterIds: ['foreign-character'] }] }],
+      [speech, { ...speechOutput, dialogues: [{ ...speechRow, id: 'foreign-dialogue' }] }],
+    ] as const) {
+      const upstream = fixtureReply(output);
+      const { handler } = fixture({ fetch: upstream as typeof fetch });
+      const response = await handler(request(body));
+      expect(response.status).toBe(502);
       expect(await response.json()).toEqual({ error: 'INVALID_UPSTREAM_RESPONSE' });
       expect(upstream).toHaveBeenCalledOnce();
     }

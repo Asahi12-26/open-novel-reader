@@ -1,5 +1,7 @@
 # 人物分析质量样本
 
+V0.6 使用同样的语料和新增四句特殊引号样本，对照旧提取器与新版剧情任务提取器。 [V0.6 离线质量对照](V06_STORY_MEMORY.md#离线质量对照)
+
 `evaluation/ai-corpus.json` 是人工标注的少量中英文回归样本，包含直接对话、代词不明、身份揭示、同名不同人、缩写引号、人工纠错，以及公版文学的节选。标签不是模型回答，不能用标签本身宣称模型准确率。
 
 真实文学样本来自鲁迅《孔乙己》（1919）及 Lewis Carroll 的 *Alice's Adventures in Wonderland*（1865）第五章。原文来源、作者与权利说明保存在 corpus 的 `sources`；原作公有领域状态分别见[维基文库](https://zh.wikisource.org/wiki/%E5%AD%94%E4%B9%99%E5%B7%B1)及[Project Gutenberg 目录](https://www.gutenberg.org/ebooks/11)。仅使用少量原文节选，没有现代译文或插图；英文段落合并了源文件的排版换行。其余场景是本项目原创。

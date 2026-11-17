@@ -77,7 +77,42 @@ export function extractDialogues(chapter: Chapter): DialogueCandidate[] {
   return candidates;
 }
 export function chunksFor(chapter: Chapter) {
-  const candidates = extractDialogues(chapter);
+  return partitionDialogues(chapter, extractDialogues(chapter));
+}
+export function extractStoryDialogues(chapter: Chapter): DialogueCandidate[] {
+  const candidates = extractDialogues(chapter).filter(row => {
+    const paragraph = chapter.paragraphs[row.paragraphIndex];
+    const source = paragraph.slice(Math.max(0, row.start - 40), row.start);
+    // Only skip quotation forms whose immediate frame explicitly describes written text.
+    return !/(?:描紅紙|描红纸|引文|題辭|题辞|書名|书名|碑文|石碑|牌匾)(?:上(?:的)?|中(?:的)?|[：:]\s*)?$/u.test(source);
+  });
+  const byParagraph = new Map<number, DialogueCandidate[]>();
+  const nested = new Set<string>();
+  for (const item of candidates) {
+    const rows = byParagraph.get(item.paragraphIndex) ?? [];
+    rows.push(item);
+    byParagraph.set(item.paragraphIndex, rows);
+  }
+  chapter.paragraphs.forEach((paragraph, paragraphIndex) => {
+    const existing = byParagraph.get(paragraphIndex) ?? [];
+    const extra: RegExpMatchArray[] = [...paragraph.matchAll(/«[^«»\r\n]{1,1798}»|‹[^‹›\r\n]{1,1798}›|„[^„“\r\n]{1,1798}“|＂[^＂\r\n]{1,1798}＂/gu)];
+    const dash = paragraph.match(/^\s*(?:—|–)\s*[^\s—–][^\r\n]{1,1796}$/u);
+    if (dash && !existing.length && !extra.length) extra.push(dash);
+    for (const match of extra) {
+      const text = match[0].trim();
+      const start = (match.index ?? 0) + match[0].indexOf(text);
+      const end = start + text.length;
+      if (text.length > 1800 || existing.some(row => row.start < end && start < row.end && !(start < row.start && row.end < end))) continue;
+      for (const row of existing) if (start < row.start && row.end < end) nested.add(row.id);
+      candidates.push({ id: `${chapter.id}:${paragraphIndex}:${start}:${end}`, paragraphIndex, start, end, text });
+    }
+  });
+  return candidates.filter(row => !nested.has(row.id)).sort((a, b) => a.paragraphIndex - b.paragraphIndex || a.start - b.start);
+}
+export function storyChunksFor(chapter: Chapter) {
+  return partitionDialogues(chapter, extractStoryDialogues(chapter));
+}
+function partitionDialogues(chapter: Chapter, candidates: DialogueCandidate[]) {
   const chunks: DialogueCandidate[][] = [];
   let chunk: DialogueCandidate[] = [];
   for (const candidate of candidates) {
@@ -261,19 +296,23 @@ export async function renameCharacter(characterId: string, name: string, scope?:
   await manualRenameCharacter(characterId, name, scope);
 }
 export async function correctDialogue(dialogueId: string, characterId: string | null): Promise<void> {
-  await db.transaction('rw', db.corrections, db.dialogues, db.characters, async () => {
+  await db.transaction('rw', [db.corrections, db.dialogues, db.characters, db.dialogueCorrectionRevisions], async () => {
     const dialogue = await db.dialogues.get(dialogueId);
     if (!dialogue) throw new AIError('未找到对白。');
     if (characterId && (await db.characters.get(characterId))?.bookId !== dialogue.bookId) throw new AIError('人物不属于当前书籍。');
     const updatedAt = Date.now();
     await db.corrections.put({ id: `manual:${dialogueId}`, dialogueId, bookId: dialogue.bookId, characterId, updatedAt });
-    await db.dialogues.update(dialogueId, { characterId, source: 'manual', confidence: 1, updatedAt });
+    await db.dialogues.update(dialogueId, { characterId, source: 'manual', confidence: 1, updatedAt, verifiedQuote: undefined, possibleCharacterIds: undefined });
+    await db.dialogueCorrectionRevisions.add({ id: crypto.randomUUID(), dialogueId, chapterId: dialogue.chapterId, bookId: dialogue.bookId, previousCharacterId: dialogue.characterId, characterId, updatedAt });
   });
 }
 export async function mergeCharacters(sourceId: string, targetId: string, scope?: IdentityLocation): Promise<void> {
   await manualMergeCharacters(sourceId, targetId, scope);
 }
-export interface ModelAttribution { id: string; speaker: string | null; confidence: number; characterId?: string | null }
+export interface ModelAttribution {
+  id: string; speaker: string | null; confidence: number; characterId?: string | null;
+  speech?: boolean; possibleCharacterIds?: string[];
+}
 type AttributionEvidence = Pick<ReturnType<typeof payloadFor>, 'known' | 'context'>;
 function hasSpeakerEvidence(speaker: string, evidence: AttributionEvidence) {
   const name = normalizedName(speaker);
@@ -332,6 +371,10 @@ export async function saveAnalysisChunk(chapter: Chapter, candidates: DialogueCa
       const previous = await db.dialogues.get(candidate.id);
       const row = rows.find(r => r.id === candidate.id)!;
       const manual = !!correction || previous?.source === 'manual';
+      if (row.speech === false && !manual) {
+        if (previous && row.confidence >= .9) await db.dialogues.update(candidate.id, { verifiedQuote: false, updatedAt: Date.now() });
+        continue;
+      }
       // An inconclusive review cannot erase an already attributed line.
       if (deep?.review && previous && !manual && previous.characterId && (!row.speaker || row.confidence < previous.confidence)) continue;
       let character: Character | undefined;
@@ -356,7 +399,9 @@ export async function saveAnalysisChunk(chapter: Chapter, candidates: DialogueCa
       const dialogue: Dialogue = { ...candidate, bookId: chapter.bookId, chapterId: chapter.id,
         characterId: correction ? correction.characterId : manual ? previous!.characterId : character?.id || null,
         confidence: manual ? 1 : row.confidence, source: manual ? 'manual' : 'ai', model, updatedAt: Date.now(),
-        ...(manual && previous?.speakerLabel ? { speakerLabel: previous.speakerLabel } : deep && !manual && character && row.speaker ? { speakerLabel: row.speaker } : {}) };
+        ...(manual && previous?.speakerLabel ? { speakerLabel: previous.speakerLabel } : deep && !manual && character && row.speaker ? { speakerLabel: row.speaker } : {}),
+        ...(!manual && !character && row.possibleCharacterIds?.length ? { possibleCharacterIds: row.possibleCharacterIds.filter(id => deep?.input.known.some(person => person.id === id)).slice(0, 3) } : {}),
+      };
       await db.dialogues.put(dialogue);
     }
     assertLive();

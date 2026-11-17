@@ -4,6 +4,8 @@ import { MAX_AVATAR_BYTES, validAvatarRevision, validateAvatarImage } from './av
 import { bookAccountScope, bookOwnerKey, bookOwnerScope } from './book-owner';
 import { MAX_FILE_BYTES, parseEpub, parseTxt } from './parser';
 import { mergeCharacterIdentity, validCharacterIdentity, validIdentityGraph } from '../services/character-identity';
+import { installBookStory, readBookStory, rebindStoryScope, validateBookStory, type BookStoryData } from './story-data';
+import { chooseSeriesRecord, isSeries, type Series } from './series-types';
 
 const palette = ['#355e56', '#9e674d', '#4c5978', '#a58a52', '#6d526d', '#627a8e'];
 
@@ -86,6 +88,8 @@ interface Backup {
   chapters: Chapter[]; progress: ReadingProgress[]; bookmarks: Bookmark[]; shelves: Bookshelf[];
   characters: Character[]; dialogues: Dialogue[]; corrections: CharacterCorrection[]; jobs: AnalysisJob[];
   avatars?: Array<AvatarRevision & { base64?: string }>;
+  stories?: { bookId: string; data: BookStoryData }[];
+  series?: Series[];
   settings: { id: string; value: unknown }[];
 }
 export interface BackupAccount {
@@ -124,13 +128,27 @@ export async function exportBackup(account?: BackupAccount): Promise<Blob> {
     const bookData = <T extends { bookId: string }>(rows: T[]) => rows.filter(row => bookIds.has(row.bookId));
     const characters = bookData(await db.characters.toArray());
     const characterIds = new Set(characters.map(character => character.id));
+    const seriesScope = account?.userId ? bookAccountScope(account.origin, account.userId) : 'local';
+    const series = (await db.series.where('scope').equals(seriesScope).toArray()).map(row => ({ ...row, scope: 'local' }));
+    const characterByBook = new Map<string, Set<string>>();
+    for (const character of characters) {
+      const ids = characterByBook.get(character.bookId) ?? new Set<string>();
+      ids.add(character.id);
+      characterByBook.set(character.bookId, ids);
+    }
+    const stories: NonNullable<Backup['stories']> = [];
+    for (const book of books) {
+      if (book.deletedAt) continue;
+      const data = await readBookStory(book.id, seriesScope, characterByBook.get(book.id) ?? new Set<string>());
+      if (data) stories.push({ bookId: book.id, data: rebindStoryScope(data, 'local') });
+    }
     const settings = await db.settings.get('preferences');
     return {
       books, files: bookData(await db.files.toArray()), chapters: bookData(await db.chapters.toArray()),
       progress: bookData(await db.progress.toArray()), bookmarks: bookData(await db.bookmarks.toArray()), shelves: await db.shelves.toArray(),
       characters, dialogues: bookData(await db.dialogues.toArray()), corrections: bookData(await db.corrections.toArray()),
       avatars: bookData(await db.avatars.toArray()).filter(row => characterIds.has(row.characterId)),
-      jobs: bookData(await db.jobs.toArray()), settings: settings ? [settings] : [],
+      jobs: bookData(await db.jobs.toArray()), settings: settings ? [settings] : [], series, stories,
     };
   });
   const files = await Promise.all(snapshot.files.map(async file => ({ bookId: file.bookId, name: file.name, mime: file.mime, base64: encodeBase64(new Uint8Array(await file.bytes.arrayBuffer())) })));
@@ -189,6 +207,33 @@ function validateBackup(value: unknown): Backup {
   for (const row of backup.dialogues) if (!object(row) || !id(row.id) || !locationValid(row) || !num(row.start) || !num(row.end) || row.end < row.start || row.end > chapterById.get(row.chapterId)!.paragraphs[row.paragraphIndex].length || !str(row.text, 100000) || !(row.characterId === null || id(row.characterId)) || !num(row.confidence) || row.confidence > 1 || !['ai', 'manual'].includes(row.source) || !num(row.updatedAt) || (row.speakerLabel !== undefined && !str(row.speakerLabel, 80))) invalid();
   for (const row of backup.corrections) if (!object(row) || !id(row.id) || !id(row.dialogueId) || !bookIds.has(row.bookId) || !(row.characterId === null || id(row.characterId)) || !num(row.updatedAt)) invalid();
   for (const row of backup.jobs) if (!object(row) || !id(row.id) || !bookIds.has(row.bookId) || !chapterIds.has(row.chapterId) || !['queued', 'running', 'paused', 'done', 'failed', 'cancelled'].includes(row.status) || !num(row.completedChunks) || !num(row.totalChunks) || !num(row.updatedAt)) invalid();
+  if (backup.series !== undefined && (
+    !Array.isArray(backup.series) || backup.series.length > 5000 ||
+    !backup.series.every(value => isSeries(value) && value.scope === 'local') ||
+    new Set(backup.series.map(value => value.id)).size !== backup.series.length
+  )) invalid();
+  if (backup.stories !== undefined) {
+    if (!Array.isArray(backup.stories) || backup.stories.length > backup.books.length) invalid();
+    const seen = new Set<string>();
+    const books = new Map(backup.books.map(book => [book.id, book]));
+    const group = <T extends { bookId: string }>(rows: T[]) => {
+      const grouped = new Map<string, T[]>();
+      for (const value of rows) {
+        const items = grouped.get(value.bookId) ?? [];
+        items.push(value);
+        grouped.set(value.bookId, items);
+      }
+      return grouped;
+    };
+    const chapters = group(backup.chapters);
+    const characters = group(backup.characters);
+    const dialogues = group(backup.dialogues);
+    for (const row of backup.stories) {
+      if (!object(row) || !id(row.bookId) || seen.has(row.bookId) || !books.has(row.bookId) ||
+        !validateBookStory(row.data, books.get(row.bookId)!, chapters.get(row.bookId) || [], characters.get(row.bookId) || [], dialogues.get(row.bookId) || [], 'local')) invalid();
+      seen.add(row.bookId);
+    }
+  }
   backup.settings = backup.settings.filter(row => {
     if (!object(row) || row.id !== 'preferences' || !object(row.value)) return false;
     const prefs = row.value;
@@ -279,6 +324,17 @@ export async function restoreBackup(file: File, account?: BackupAccount): Promis
     for (const job of backup.jobs) {
       const current = await db.jobs.get(job.id);
       if (!current || current.updatedAt <= job.updatedAt) await db.jobs.put({ ...job, status: job.status === 'running' ? 'paused' : job.status });
+    }
+    const seriesScope = account?.userId ? bookAccountScope(account.origin, account.userId) : 'local';
+    for (const row of backup.series ?? []) {
+      const existing = await db.series.get(row.id);
+      if (existing && existing.scope !== seriesScope) throw new Error('备份内的系列已属于本机另一账号。请切回原账号恢复。');
+      const next = { ...row, scope: seriesScope };
+      await db.series.put(existing ? chooseSeriesRecord(existing, next) : next);
+    }
+    for (const { bookId, data } of backup.stories ?? []) {
+      const book = await db.books.get(bookId);
+      if (book && !book.deletedAt) await installBookStory(bookId, rebindStoryScope(data, seriesScope));
     }
     for (const setting of backup.settings) if (!(await db.settings.get(setting.id))) await db.settings.put(setting);
     account?.assertCurrent?.();

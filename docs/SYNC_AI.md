@@ -1,10 +1,10 @@
 # 云同步与真实 AI 部署
 
-本地阅读无需账号。V0.5 同步已授权书籍的头像，线上 `deepseek-proxy` 继续支持逐章和整书分析。分析使用读者自行载入的会话密钥。 [头像与人物管理](CHARACTER_AVATARS.md) · [整书分析指南](BOOK_ANALYSIS.md)
+本地阅读无需账号。V0.6 同步已授权书籍的剧情、简介与系列关联，复用原有私有书籍包和头像存储。分析使用读者自行载入的会话密钥。 [剧情理解与系列记忆](V06_STORY_MEMORY.md) · [头像与人物管理](CHARACTER_AVATARS.md)
 
 ## Supabase
 
-1. 在自己的 Supabase 项目的 SQL 编辑器按文件名顺序执行 `supabase/migrations/` 下的迁移，或使用 Supabase CLI 的 `supabase link --project-ref <ref>` 和 `supabase db push`。已有项目只需运行待应用的增量迁移。V0.5 的头像迁移创建私有图片桶，现有阅读数据保留。
+1. 在自己的 Supabase 项目的 SQL 编辑器按文件名顺序执行 `supabase/migrations/` 下的迁移。使用 CLI 时先确认版本和目标，链接自己的项目后应用待执行迁移。V0.6 的 `20261117084208_preserve_story_records.sql` 保护旧客户端更新书籍包时遗漏的剧情数据，沿用现有所有权策略。 [数据库迁移指南](https://supabase.com/docs/guides/deployment/database-migrations)
 2. 在 Auth 中启用邮箱登录，配置正式站点 URL、允许的重定向 URL、SMTP 和邮箱确认策略。首次注册后可能需要先点确认邮件。
 3. 在阅读器设置中填写项目 HTTPS URL 和 **publishable / anon 公钥**；也可构建时设置 `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`。绝不能把 service-role/secret key 放进前端。
 4. 在两台设备登录同一个账号，在书籍详情明确勾选云同步，再执行同步。第一次会上传原文件、章节文本及这本书的元数据。没有选择的书不会被上传。
@@ -44,7 +44,9 @@ supabase functions deploy deepseek-proxy
 
 密钥会随明确操作通过 TLS 发送到**你配置的 Supabase 服务端**，然后作为 Authorization 发送到 DeepSeek。函数只在本次调用内使用、不持久化也不打印。部署者仍须确保反向代理/观测系统不记录请求体；客户端内存策略不能阻止用户安装的不可信扩展或受感染终端读取内存。
 
-「检查代理」发送经过登录认证的 `status` 请求，内容仅包含操作类型。「测试连接」查询 `/models`。逐章与整书任务均在用户明确授权后调用生成接口，发送该范围内的对白、邻近上下文与已有人物信息。整书客户端在预留预算前检查代理是否支持 `identity-v1`。逐章请求沿用既有格式。暂停在当前分片后生效，取消会中止本地请求。已发出的请求仍可能产生费用。
+「检查代理」发送经过登录认证的 `status` 请求，内容仅包含操作类型。「测试连接」查询 `/models`。逐章与整书任务均在用户明确授权后调用生成接口。V0.6 新整书任务在预留预算前确认代理支持 `plot-v1` 与 `story-identity-v1`。旧任务沿用 `identity-v1`，逐章请求沿用既有格式。暂停在当前分片后生效，取消会中止本地请求。已发出的请求仍可能产生费用。 [Edge Function 配置](https://supabase.com/docs/guides/functions/function-configuration)
+
+系列记忆随明确勾选的 AI 分析范围发送，按各来源书的已读位置筛选。云同步单独使用每本书的授权，其他卷的证据、章节和头像由自己的书籍包同步。
 
 客户端与代理共用 2026-11-10 核对的报价。峰时缓存未命中时，每百万输入和输出 token 分别为 Flash 的 $0.30 和 $1.20，以及 Pro 的 $1.32 和 $3.96。估算用 UTF-8 字节数计算输入、每分片最多 4096 个输出 token，再加 10% 裕量。发送前原子预留预算，失败与超时的预留计入累计预算。整书任务总预算最高 US$10，余额不足时停止并保留结果。估算仅用于应用侧预检，实际收费以服务商账单为准。 [DeepSeek 官方价格](https://api-docs.deepseek.com/quick_start/pricing/)
 

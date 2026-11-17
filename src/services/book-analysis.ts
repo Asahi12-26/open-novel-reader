@@ -1,13 +1,24 @@
 import { liveQuery } from 'dexie';
 import { db } from '../core/db';
-import type { Chapter, Character, Dialogue, ReadingProgress } from '../types';
+import { bookAccountScope, bookOwnerKey, bookOwnerScope } from '../core/book-owner';
+import type { Chapter, Character, Dialogue, IdentityLocation, ReadingProgress } from '../types';
+import type { SeriesMemorySelection } from '../core/plot-types';
 import { getCloudConfig, getSession } from './cloud';
 import { AI_BOOK_SYSTEM_PROMPT, AI_OUTPUT_LIMIT, MAX_AI_REQUEST_COST_USD } from '../../supabase/functions/_shared/ai-contract';
-import { AIError, AI_MODELS, bookPayloadFor, chunksFor, createBoundAnalysisSession, estimateBookChunk, extractDialogues, registerBookAnalysis, saveAnalysisChunk, validateDeepAttributions, withAnalysisBookLock } from './ai';
+import { AIError, AI_MODELS, bookPayloadFor, chunksFor, createBoundAnalysisSession, estimateBookChunk, extractDialogues, extractStoryDialogues, registerBookAnalysis, saveAnalysisChunk, storyChunksFor, validateDeepAttributions, withAnalysisBookLock } from './ai';
 import type { AIModel, DialogueCandidate } from './ai';
-import { compareIdentityLocations, createIdentityProjector, projectCharactersAt } from './character-identity';
+import { compareIdentityLocations, createIdentityProjector, projectCharactersAt, validIdentityLocation } from './character-identity';
 import type { IdentityProposal } from './character-identity';
-import type { BookAnalysisBoundary, BookAnalysisController, BookAnalysisEstimate, BookAnalysisJob, BookAnalysisMode, BookAnalysisOptions, BookChapterTask } from './book-analysis-types';
+import type { BookAnalysisBoundary, BookAnalysisController, BookAnalysisEstimate, BookAnalysisJob, BookAnalysisMode, BookAnalysisOptions, BookAnalysisPipeline, BookChapterTask } from './book-analysis-types';
+import { commitPlotWindow, retrievePlotMemory, validatePlotOutput } from './plot-memory';
+import { getSeriesMembership } from './series';
+import { boundedStoryManual, plotCost, plotWindows, storyAttributions, storyRequestCost, storySpeechCost, storySpeechInput } from './book-story';
+import type { PlotWindow } from './book-story';
+import {
+  STORY_IDENTITY_PROTOCOL, STORY_IDENTITY_SYSTEM_PROMPT, STORY_PLOT_PROTOCOL, STORY_PLOT_SYSTEM_PROMPT,
+  validStoryPlotInput, validStoryPlotOutput, validStorySpeechInput,
+} from '../../supabase/functions/_shared/story-contract';
+import type { StoryPlotInput, StorySpeechInput } from '../../supabase/functions/_shared/story-contract';
 export type * from './book-analysis-types';
 
 export const MAX_BOOK_ANALYSIS_BUDGET_USD = 10;
@@ -61,7 +72,7 @@ async function bookSource(bookId: string) {
   if (!book || book.deletedAt) throw new BookAnalysisError('书籍不存在或已移除。');
   const chapters = await db.chapters.where('bookId').equals(bookId).sortBy('index');
   if (!chapters.length) throw new BookAnalysisError('这本书没有可分析的章节。');
-  return { chapters, fingerprint: book.fingerprint };
+  return { chapters, fingerprint: book.fingerprint, language: book.language };
 }
 function fullBoundary(chapter: Chapter): BookAnalysisBoundary {
   const paragraphIndex = Math.max(0, chapter.paragraphs.length - 1);
@@ -78,6 +89,12 @@ function boundaryForProgress(chapters: Chapter[], progress?: ReadingProgress): B
   const offset = Math.max(0, Math.min(chapter.paragraphs[paragraphIndex]?.length || 0, Math.floor(progress.offset) || 0));
   return { chapterId: chapter.id, chapterIndex: chapter.index, paragraphIndex, offset };
 }
+async function assertRecapRead(chapter: Chapter, allChapters: Chapter[]) {
+  const boundary = await currentBoundary(chapter.bookId, allChapters, 'reading-progress');
+  if (!boundary || compareIdentityLocations(boundary, fullBoundary(chapter)) < 0) {
+    throw new BookAnalysisError('读完目标章节后才能重新生成本章简介。');
+  }
+}
 function chapterAtBoundary(chapter: Chapter, boundary: BookAnalysisBoundary): Chapter | null {
   if (chapter.index > boundary.chapterIndex) return null;
   if (chapter.index < boundary.chapterIndex) return clone(chapter);
@@ -85,16 +102,34 @@ function chapterAtBoundary(chapter: Chapter, boundary: BookAnalysisBoundary): Ch
   if (paragraphs.length) paragraphs[paragraphs.length - 1] = paragraphs[paragraphs.length - 1].slice(0, boundary.offset);
   return { ...chapter, paragraphs };
 }
-function plannedChunks(chapter: Chapter, ids?: Set<string>): DialogueCandidate[][] {
-  return chunksFor(chapter).map(chunk => ids ? chunk.filter(candidate => ids.has(candidate.id)) : chunk).filter(chunk => chunk.length > 0);
+function plannedChunks(chapter: Chapter, ids?: Set<string>, story = false): DialogueCandidate[][] {
+  const chunks = (story ? storyChunksFor(chapter) : chunksFor(chapter))
+    .map(chunk => ids ? chunk.filter(candidate => ids.has(candidate.id)) : chunk).filter(chunk => chunk.length > 0);
+  if (!story) return chunks;
+  return chunks.flatMap(chunk => {
+    if (validStorySpeechInput(storySpeechInput(chapter, chunk, []))) return [chunk];
+    const parts: DialogueCandidate[][] = [];
+    let accepted: DialogueCandidate[] = [];
+    for (const candidate of chunk) {
+      if (accepted.length && !validStorySpeechInput(storySpeechInput(chapter, [...accepted, candidate], []))) {
+        parts.push(accepted);
+        accepted = [];
+      }
+      accepted.push(candidate);
+    }
+    parts.push(accepted);
+    return parts;
+  });
 }
 function chunkEstimate(chapter: Chapter, candidates: DialogueCandidate[], model: AIModel) {
   const upper = estimateBookChunk(chapter, candidates, model, [], true);
   const lower = 0; // Cache discounts/output length can make any positive advertised floor misleading.
   return { upper: upper.usd, lower };
 }
-function reviewUpper(chapter: Chapter, model: AIModel): number {
-  const largest = extractDialogues(chapter).sort((a, b) => byteLength(b) - byteLength(a)).slice(0, 12);
+function reviewUpper(chapter: Chapter, model: AIModel, story = false): number {
+  const all = (story ? extractStoryDialogues : extractDialogues)(chapter);
+  if (story) return all.length ? MAX_AI_REQUEST_COST_USD : 0;
+  const largest = all.sort((a, b) => byteLength(b) - byteLength(a)).slice(0, 12);
   if (!largest.length) return 0;
   const payload = bookPayloadFor(chapter, largest, []);
   const cost = estimateBookChunk(chapter, largest, model, [], true);
@@ -104,34 +139,64 @@ function reviewUpper(chapter: Chapter, model: AIModel): number {
   const info = AI_MODELS.find(item => item.id === model)!;
   return Math.min(MAX_AI_REQUEST_COST_USD, cost.usd + extraBytes * info.inputPerMillion / 1_000_000 * 1.1);
 }
-function boundedReview(chapter: Chapter, candidates: DialogueCandidate[], model: AIModel) {
+function boundedReview(chapter: Chapter, candidates: DialogueCandidate[], model: AIModel, story = false) {
   const result: DialogueCandidate[] = [];
   for (const candidate of candidates) {
     const trial = [...result, candidate]; const cost = estimateBookChunk(chapter, trial, model, [], true);
-    if (trial.length > 12 || cost.input > 95000 || cost.usd > MAX_AI_REQUEST_COST_USD) break;
+    if (trial.length > 12 || cost.input > 95000 || (story ? storySpeechCost(chapter, trial, model) : cost.usd) > MAX_AI_REQUEST_COST_USD ||
+      (story && !validStorySpeechInput(storySpeechInput(chapter, trial, [])))) break;
     result.push(candidate);
   }
   return result;
 }
-export async function estimateBookAnalysis(bookId: string, model: AIModel = 'deepseek-flash', mode: BookAnalysisMode = 'deep'): Promise<BookAnalysisEstimate> {
+interface EstimateOptions { pipeline?: BookAnalysisPipeline; summaryChapterId?: string }
+const atStart = (chapter: Chapter): IdentityLocation => ({ chapterIndex: chapter.index, paragraphIndex: 0, offset: 0 });
+export async function estimateBookAnalysis(bookId: string, model: AIModel = 'deepseek-flash', mode: BookAnalysisMode = 'deep', options: EstimateOptions = {}): Promise<BookAnalysisEstimate> {
   if (!AI_MODELS.some(known => known.id === model) || !['deep', 'reading-progress'].includes(mode)) throw new BookAnalysisError('请选择支持的分析范围和模型。');
-  const { chapters } = await bookSource(bookId);
-  return estimateScope(chapters, await currentBoundary(bookId, chapters, mode), model);
+  const { chapters: allChapters } = await bookSource(bookId);
+  const chapters = options.summaryChapterId ? allChapters.filter(chapter => chapter.id === options.summaryChapterId) : allChapters;
+  if (!chapters.length || (options.summaryChapterId && mode !== 'deep')) throw new BookAnalysisError('请选择有效的单章简介范围。');
+  if (options.summaryChapterId) await assertRecapRead(chapters[0], allChapters);
+  return estimateScope(chapters, await currentBoundary(bookId, chapters, mode), model, options.pipeline !== 'identity-v1', !!options.summaryChapterId);
 }
-function estimateScope(chapters: Chapter[], scopeEnd: BookAnalysisBoundary | null, model: AIModel): BookAnalysisEstimate {
+function estimateScope(chapters: Chapter[], scopeEnd: BookAnalysisBoundary | null, model: AIModel, story: boolean, onlySummary: boolean): BookAnalysisEstimate {
   let chapterCount = 0; let dialogueCount = 0; let totalChunks = 0; let reviewRequests = 0; let estimatedMinUsd = 0; let estimatedMaxUsd = 0;
+  let plotRequests = 0;
   for (const source of chapters) {
     const chapter = scopeEnd && chapterAtBoundary(source, scopeEnd);
     if (!chapter) continue;
-    const candidates = extractDialogues(chapter); const chunks = plannedChunks(chapter);
+    const candidates = onlySummary ? [] : (story ? extractStoryDialogues : extractDialogues)(chapter);
+    const chunks = onlySummary ? [] : plannedChunks(chapter, undefined, story);
     chapterCount++; dialogueCount += candidates.length; totalChunks += chunks.length;
-    for (const chunk of chunks) { const cost = chunkEstimate(chapter, chunk, model); estimatedMinUsd += cost.lower; estimatedMaxUsd += cost.upper; }
+    for (const chunk of chunks) {
+      if (story) estimatedMaxUsd += storySpeechCost(chapter, chunk, model);
+      else { const cost = chunkEstimate(chapter, chunk, model); estimatedMinUsd += cost.lower; estimatedMaxUsd += cost.upper; }
+    }
+    if (story) {
+      const windows = plotWindows(chapter, atStart(chapter));
+      plotRequests += windows.length;
+      estimatedMaxUsd += plotCost(chapter, windows, model);
+    }
     if (candidates.length) {
       reviewRequests++;
-      estimatedMaxUsd += reviewUpper(chapter, model);
+      estimatedMaxUsd += reviewUpper(chapter, model, story);
     }
   }
-  return { chapterCount, totalChapters: chapters.length, dialogueCount, totalChunks, reviewRequests, maxRequests: totalChunks + reviewRequests, estimatedMinUsd, estimatedMaxUsd, scopeEnd };
+  return { chapterCount, totalChapters: chapters.length, dialogueCount, totalChunks, reviewRequests, maxRequests: totalChunks + reviewRequests + plotRequests, estimatedMinUsd, estimatedMaxUsd, scopeEnd, ...(story ? { plotRequests } : {}) };
+}
+
+function validatedSelections(value: readonly SeriesMemorySelection[] | undefined): SeriesMemorySelection[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 8) throw new BookAnalysisError('请选择至多 8 本获授权的记忆来源书。');
+  const used = new Set();
+  return value.map(item => {
+    if (!object(item) || typeof item.bookId !== 'string' || !item.bookId || item.bookId.length > 240 || used.has(item.bookId) ||
+      !validIdentityLocation(item.through)) {
+      throw new BookAnalysisError('系列记忆授权范围无效。');
+    }
+    used.add(item.bookId);
+    return { bookId: item.bookId, through: { chapterIndex: item.through.chapterIndex, paragraphIndex: item.through.paragraphIndex, offset: item.through.offset } };
+  }).sort((a, b) => a.bookId.localeCompare(b.bookId));
 }
 
 /** A single explicit, session-bound authorization may advance across the whole planned book. */
@@ -153,19 +218,40 @@ export function analyzeBook(options: BookAnalysisOptions): BookAnalysisControlle
     const assertWork = () => { session.assert(); if (cancelled) throw new BookAnalysisError('任务已停止；已完成结果保留。'); };
     try {
       const source = await bookSource(options.bookId);
+      const ownerKey = bookOwnerKey(options.bookId);
+      const readOwner = async () => bookOwnerScope((await db.settings.get(ownerKey))?.value, session.principal.projectUrl);
+      const ownerAtStart = await readOwner();
+      if (ownerAtStart && ownerAtStart !== bookAccountScope(session.principal.projectUrl, session.principal.userId)) {
+        throw new BookAnalysisError('当前书籍不属于本次登录账号。');
+      }
       const bookSignature = await digest({ fingerprint: source.fingerprint, chapters: source.chapters.map(({ id, index, title, paragraphs }) => ({ id, index, title, paragraphs })) });
-      const signature = await digest({ source: bookSignature, model: options.model, mode: options.mode, principal: session.principal });
       const ledgerId = budgetPrefix + id;
       const persistedLedger = (await db.settings.get(ledgerId))?.value;
       const prior = options.jobId ? await readBookAnalysisJob(id) : undefined;
       assertWork();
       if (options.jobId && !prior) throw new BookAnalysisError('整书任务检查点不存在或损坏，请新建任务；已有识别结果保留。');
+      const pipeline = prior ? prior.pipeline ?? 'identity-v1' : options.pipeline ?? 'story-v1';
+      if (options.pipeline !== undefined && options.pipeline !== pipeline) throw new BookAnalysisError('续跑须沿用原分析流程。');
+      const story = pipeline === 'story-v1';
+      const selections = validatedSelections(options.seriesMemory ?? prior?.seriesMemory);
+      const summaryChapterId = options.summaryChapterId ?? prior?.summaryChapterId;
+      const summaryOnly = !!summaryChapterId;
+      if ((!story && (selections.length > 0 || summaryOnly)) || (summaryOnly && options.mode !== 'deep') || selections.some(item => item.bookId === options.bookId)) {
+        throw new BookAnalysisError('任务范围无效，请检查简介目标或系列来源。');
+      }
+      const planChapters = summaryOnly ? source.chapters.filter(chapter => chapter.id === summaryChapterId) : source.chapters;
+      const chaptersById = new Map(planChapters.map(chapter => [chapter.id, chapter]));
+      if (!planChapters.length) throw new BookAnalysisError('简介的目标章节已不存在。');
+      if (summaryOnly) await assertRecapRead(planChapters[0], source.chapters);
+      const signature = await digest({ source: bookSignature, model: options.model, mode: options.mode, principal: session.principal,
+        ...(story ? { pipeline, selections, summaryChapterId } : {}) });
       if (prior) {
         if (prior.bookId !== options.bookId || prior.bookSignature !== bookSignature || prior.model !== options.model || prior.mode !== options.mode || prior.budgetUsd !== options.budgetUsd || !samePrincipal(prior, session.principal)) throw new BookAnalysisError('任务的书籍、账号、模型、范围或固定总预算已变化。不能修改旧任务预算，请新建任务。');
         if (!object(persistedLedger) || persistedLedger.signature !== signature || persistedLedger.reservedUsd !== prior.reservedUsd || persistedLedger.budgetUsd !== prior.budgetUsd) throw new BookAnalysisError('缺少匹配的本机预算记录，不能自动恢复收费任务；已有结果保留。');
         job = { ...clone(prior), status: 'queued', error: undefined, updatedAt: Date.now() };
       } else {
-        job = { version: 1, id, bookId: options.bookId, model: options.model, mode: options.mode, status: 'queued', stage: 'preparing', chapters: [], completedChapters: 0, completedChunks: 0, totalChunks: 0, reviewRequests: 0, completedReviews: 0, dialogueCount: 0, unknownCount: 0, characterCount: 0, reservedUsd: 0, budgetUsd: options.budgetUsd, estimatedMaxUsd: 0, createdAt: Date.now(), updatedAt: Date.now(), scopeEnd: null, bookSignature, principal: session.principal };
+        job = { version: 1, id, bookId: options.bookId, model: options.model, mode: options.mode, status: 'queued', stage: 'preparing', chapters: [], completedChapters: 0, completedChunks: 0, totalChunks: 0, reviewRequests: 0, completedReviews: 0, dialogueCount: 0, unknownCount: 0, characterCount: 0, reservedUsd: 0, budgetUsd: options.budgetUsd, estimatedMaxUsd: 0, createdAt: Date.now(), updatedAt: Date.now(), scopeEnd: null, bookSignature, principal: session.principal,
+          ...(story ? { pipeline, seriesMemory: selections, summaryChapterId, plotRequests: 0, completedPlotRequests: 0 } : {}) };
         await db.transaction('rw', db.settings, async () => {
           assertWork(); await db.settings.put({ id: ledgerId, value: { signature, reservedUsd: 0, budgetUsd: options.budgetUsd } });
           await db.settings.put({ id: prefix + id, value: clone(job!) });
@@ -178,7 +264,7 @@ export function analyzeBook(options: BookAnalysisOptions): BookAnalysisControlle
       };
       const inspectMetrics = async () => {
         const ids = new Set(job!.chapters.flatMap(chapter => chapter.candidateIds));
-        const dialogues = (await db.dialogues.where('bookId').equals(options.bookId).toArray()).filter(dialogue => ids.has(dialogue.id));
+        const dialogues = (await db.dialogues.where('bookId').equals(options.bookId).toArray()).filter(dialogue => ids.has(dialogue.id) && dialogue.verifiedQuote !== false);
         const characters = await db.characters.where('bookId').equals(options.bookId).toArray();
         job!.dialogueCount = dialogues.length;
         job!.unknownCount = dialogues.filter(dialogue => !dialogue.characterId || dialogue.confidence < 0.75).length;
@@ -188,6 +274,10 @@ export function analyzeBook(options: BookAnalysisOptions): BookAnalysisControlle
         job!.totalChunks = job!.chapters.reduce((sum, entry) => sum + entry.totalChunks, 0);
         job!.completedChapters = new Set(job!.chapters.filter(entry => entry.status === 'done').map(entry => entry.chapterId)).size;
         job!.completedReviews = job!.chapters.filter(entry => entry.reviewCompleted && entry.reviewCandidateIds.length > 0).length;
+        if (story) {
+          job!.plotRequests = job!.chapters.reduce((sum, entry) => sum + (entry.plotRequests ?? 0), 0);
+          job!.completedPlotRequests = job!.chapters.reduce((sum, entry) => sum + (entry.completedPlotRequests ?? 0), 0);
+        }
       };
       const reserve = async (amountUsd: number) => {
         if (!Number.isFinite(amountUsd) || amountUsd <= 0 || amountUsd > MAX_AI_REQUEST_COST_USD) throw new BookAnalysisError('当前分片超过代理单请求费用边界，未发起请求。');
@@ -214,20 +304,32 @@ export function analyzeBook(options: BookAnalysisOptions): BookAnalysisControlle
       const appendScope = async (boundary: BookAnalysisBoundary | null) => {
         if (!boundary || (job!.scopeEnd && compareIdentityLocations(boundary, job!.scopeEnd) <= 0)) return false;
         const plannedIds = new Set(job!.chapters.flatMap(entry => entry.candidateIds));
-        for (const original of source.chapters) {
+        const lastPlot = new Map<string, BookAnalysisBoundary>();
+        for (const entry of job!.chapters) if (entry.plotRequests) lastPlot.set(entry.chapterId, entry.scopeEnd);
+        for (const original of planChapters) {
           const chapter = chapterAtBoundary(original, boundary); if (!chapter) continue;
-          const candidates = extractDialogues(chapter).filter(candidate => !plannedIds.has(candidate.id));
-          if (!candidates.length) continue;
-          const ids = candidates.map(candidate => candidate.id); const chunks = plannedChunks(chapter, new Set(ids));
+          const candidates = summaryOnly ? [] : (story ? extractStoryDialogues : extractDialogues)(chapter).filter(candidate => !plannedIds.has(candidate.id));
+          const scopeEnd = chapter.index < boundary.chapterIndex ? fullBoundary(chapter) : clone(boundary);
+          const from = lastPlot.get(chapter.id) ?? atStart(chapter);
+          // Reading-only prose advances at paragraph boundaries, instead of charging for each scroll anchor.
+          const paragraphComplete = scopeEnd.offset >= chapter.paragraphs[scopeEnd.paragraphIndex]?.length && (chapter.index < boundary.chapterIndex ||
+            scopeEnd.offset >= (original.paragraphs[scopeEnd.paragraphIndex]?.length ?? Infinity));
+          const windows = story && (options.mode === 'deep' || candidates.length > 0 || scopeEnd.paragraphIndex > from.paragraphIndex || paragraphComplete)
+            ? plotWindows(chapter, from) : [];
+          if (!candidates.length && !windows.length) continue;
+          const ids = candidates.map(candidate => candidate.id); const chunks = plannedChunks(chapter, new Set(ids), story);
           const entryId = crypto.randomUUID();
-          job!.chapters.push({ id: entryId, chapterId: chapter.id, index: chapter.index, title: chapter.title, jobId: entryId, candidateIds: ids, completedChunks: 0, totalChunks: chunks.length, status: 'queued', signature: await digest({ paragraphs: chapter.paragraphs, ids }), scopeEnd: chapter.index < boundary.chapterIndex ? fullBoundary(chapter) : clone(boundary), reviewCandidateIds: [], reviewCompleted: false });
+          job!.chapters.push({ id: entryId, chapterId: chapter.id, index: chapter.index, title: chapter.title, jobId: entryId, candidateIds: ids, completedChunks: 0, totalChunks: chunks.length, status: 'queued', signature: await digest({ paragraphs: chapter.paragraphs, ids }), scopeEnd, reviewCandidateIds: [], reviewCompleted: false,
+            ...(story ? { plotFrom: from, plotRequests: windows.length, completedPlotRequests: 0 } : {}) });
           for (const candidate of candidates) plannedIds.add(candidate.id);
         }
         job!.scopeEnd = clone(boundary);
         job!.estimatedMaxUsd = job!.reservedUsd + job!.chapters.reduce((sum, entry) => {
-          const chapter = chapterAtBoundary(source.chapters.find(item => item.id === entry.chapterId)!, entry.scopeEnd)!;
-          const remaining = plannedChunks(chapter, new Set(entry.candidateIds)).slice(entry.completedChunks).reduce((cost, chunk) => cost + estimateBookChunk(chapter, chunk, options.model, [], true).usd, 0);
-          return sum + remaining + (entry.reviewCompleted ? 0 : reviewUpper(chapter, options.model));
+          const chapter = chapterAtBoundary(chaptersById.get(entry.chapterId)!, entry.scopeEnd)!;
+          const remaining = plannedChunks(chapter, new Set(entry.candidateIds), story).slice(entry.completedChunks)
+            .reduce((cost, chunk) => cost + (story ? storySpeechCost(chapter, chunk, options.model) : estimateBookChunk(chapter, chunk, options.model, [], true).usd), 0);
+          const plot = entry.plotRequests ? plotCost(chapter, plotWindows(chapter, entry.plotFrom!).slice(entry.completedPlotRequests), options.model) : 0;
+          return sum + remaining + plot + (entry.reviewCompleted || summaryOnly ? 0 : reviewUpper(chapter, options.model, story));
         }, 0);
         await inspectMetrics(); await persist({ stage: 'analyzing', status: 'running' }); return true;
       };
@@ -241,24 +343,94 @@ export function analyzeBook(options: BookAnalysisOptions): BookAnalysisControlle
         const score = (character: Character) => [character.name, ...character.aliases].filter(name => context.includes(name.toLocaleLowerCase())).length;
         return projected.sort((a, b) => score(b) - score(a) || a.id.localeCompare(b.id));
       };
-      const sendChunk = async (entry: BookChapterTask, candidates: DialogueCandidate[], review: boolean, completedChunks: number) => {
+      const checkSource = async (entry: BookChapterTask) => {
         processingEntryId = entry.id;
         await waitIfPaused(); await session.check(); assertWork();
-        const original = source.chapters.find(chapter => chapter.id === entry.chapterId)!;
-        const [freshBook, freshChapter] = await Promise.all([db.books.get(options.bookId), db.chapters.get(entry.chapterId)]);
-        if (!freshBook || freshBook.deletedAt || !freshChapter || JSON.stringify(freshChapter.paragraphs) !== JSON.stringify(original.paragraphs)) throw new BookAnalysisError('书籍原文已变化，原任务停止；旧识别结果保留。');
-        const chapter = chapterAtBoundary(original, entry.scopeEnd)!;
-        const known = await knownAtScope(chapter, entry.scopeEnd);
-        const input = bookPayloadFor(chapter, candidates, known);
-        const reservation = estimateBookChunk(chapter, candidates, options.model, known).usd;
+        const original = chaptersById.get(entry.chapterId)!;
+        const [freshBook, freshChapter, owner] = await Promise.all([db.books.get(options.bookId), db.chapters.get(entry.chapterId), readOwner()]);
+        if (!freshBook || freshBook.deletedAt || freshBook.fingerprint !== source.fingerprint || !freshChapter || freshChapter.bookId !== options.bookId ||
+          owner !== ownerAtStart || JSON.stringify(freshChapter.paragraphs) !== JSON.stringify(original.paragraphs)) throw new BookAnalysisError('书籍原文或所属账号已变化，旧识别结果保留。');
+        if (story && options.mode === 'reading-progress') {
+          const current = await currentBoundary(options.bookId, source.chapters, options.mode);
+          if (!current || compareIdentityLocations(current, entry.scopeEnd) < 0) throw new BookAnalysisError('当前阅读位置早于本分片，请回到原阅读位置后重新授权。');
+        }
+        if (summaryOnly) await assertRecapRead(original, source.chapters);
+        return { original, chapter: chapterAtBoundary(original, entry.scopeEnd)! };
+      };
+      const performRequest = async (entry: BookChapterTask, protocol: string, system: string, input: unknown, reservation: number): Promise<unknown> => {
+        await waitIfPaused(); assertWork();
+        await checkSource(entry);
         await reserve(reservation);
+        assertWork();
         abort = new AbortController();
-        const response = await session.request({ action: 'analyze', protocol: 'identity-v1', authorized: true, model: options.model, maxTokens: AI_OUTPUT_LIMIT, system: AI_BOOK_SYSTEM_PROMPT, input, maxCostUsd: reservation }, abort.signal) as { choices?: { finish_reason?: string; message?: { content?: string } }[] };
+        const response = await session.request({ action: 'analyze', protocol, authorized: true, model: options.model, maxTokens: AI_OUTPUT_LIMIT, system, input, maxCostUsd: reservation }, abort.signal) as { choices?: { finish_reason?: string; message?: { content?: string } }[] };
         assertWork(); const choice = response.choices?.[0];
         if (choice?.finish_reason !== 'stop' || typeof choice.message?.content !== 'string') throw new BookAnalysisError('模型输出不完整，任务已停止；请重新授权后手动重试。');
-        let value: unknown; try { value = JSON.parse(choice.message.content); } catch { throw new BookAnalysisError('模型返回的 JSON 无法解析，任务已停止。'); }
+        try { return JSON.parse(choice.message.content) as unknown; } catch { throw new BookAnalysisError('模型返回的 JSON 无法解析，任务已停止。'); }
+      };
+      const memoryAt = (scope: IdentityLocation, query: string, nearbyCharacterIds?: readonly string[]) =>
+        retrievePlotMemory({ bookId: options.bookId, scope, selections, query, principal: session.principal, nearbyCharacterIds });
+      const sendPlot = async (entry: BookChapterTask, window: PlotWindow, index: number) => {
+        const { original, chapter } = await checkSource(entry);
+        const cutoff = { ...window.through, chapterId: chapter.id };
+        const excerpt = { ...chapter, paragraphs: window.context.map(row => row.text) };
+        const known = bookPayloadFor(chapter, [], await knownAtScope(excerpt, cutoff)).known;
+        const input: StoryPlotInput = {
+          chapter: chapter.title.trim().slice(0, 200) || 'Chapter', known, context: window.context,
+          language: /^zh(?:-|$)/i.test(source.language) ? 'zh' : 'en',
+          // A saved summary is shareable with this book alone. Never send cross-book text into recap generation.
+          memory: await retrievePlotMemory({ bookId: options.bookId, scope: window.from,
+            query: excerpt.paragraphs.join('\n'), principal: session.principal }),
+        };
+        if (!validStoryPlotInput(input)) throw new BookAnalysisError('剧情分片超过安全边界，未发起请求。');
+        const output = await performRequest(entry, STORY_PLOT_PROTOCOL, STORY_PLOT_SYSTEM_PROMPT, input,
+          storyRequestCost(STORY_PLOT_SYSTEM_PROMPT, input, options.model));
+        if (!validStoryPlotOutput(output, input)) throw new BookAnalysisError('剧情输出缺少可核对的原文证据，当前分片未保存。');
+        const result = validatePlotOutput(output, original, window.context, known.map(person => person.id),
+          input.memory.flatMap(hint => hint.eventId ? [hint.eventId] : []));
+        await session.check(); assertWork();
+        const nextJob = clone(job!);
+        const nextEntry = nextJob.chapters.find(item => item.id === entry.id)!;
+        nextEntry.completedPlotRequests = index + 1;
+        nextJob.completedPlotRequests = nextJob.chapters.reduce((sum, item) => sum + (item.completedPlotRequests ?? 0), 0);
+        nextJob.updatedAt = Date.now();
+        const complete = index + 1 === entry.plotRequests && compareIdentityLocations(entry.scopeEnd, fullBoundary(original)) === 0;
+        await db.transaction('rw', [db.books, db.chapters, db.characters, db.plotEvents, db.chapterSummaries, db.settings, db.series, db.seriesBooks], async () => {
+          assertWork();
+          if (await readOwner() !== ownerAtStart) throw new BookAnalysisError('书籍所属账号已变化，本分片未保存。');
+          const membership = await getSeriesMembership(options.bookId, {
+            origin: session.principal.projectUrl, userId: session.principal.userId, assertCurrent: assertWork,
+          });
+          await commitPlotWindow({
+            chapter: original, output: result, windowId: `${id}:${entry.id}:${index}`,
+            from: window.from, through: complete ? entry.scopeEnd : window.through, complete,
+            model: options.model, seriesId: membership?.seriesId,
+          });
+          assertWork();
+          await db.settings.put({ id: prefix + id, value: nextJob });
+        });
+        job = nextJob; Object.assign(entry, nextEntry); announce();
+      };
+      const sendChunk = async (entry: BookChapterTask, candidates: DialogueCandidate[], review: boolean, completedChunks: number) => {
+        const { original, chapter } = await checkSource(entry);
+        const known = await knownAtScope(chapter, entry.scopeEnd);
+        const input = story ? storySpeechInput(chapter, candidates, known) : bookPayloadFor(chapter, candidates, known);
+        let value: unknown;
+        if (story) {
+          const storyInput = input as StorySpeechInput;
+          const corrections = await db.corrections.bulkGet(candidates.map(candidate => `manual:${candidate.id}`));
+          const knownIds = new Set(storyInput.known.map(person => person.id));
+          storyInput.manual = boundedStoryManual(corrections.flatMap(record => record && record.bookId === options.bookId &&
+            (record.characterId === null || knownIds.has(record.characterId)) ? [{ id: record.dialogueId, characterId: record.characterId }] : []));
+          storyInput.memory = await memoryAt(entry.scopeEnd, input.context.map(row => row.text).join('\n'), [...knownIds]);
+          if (!validStorySpeechInput(storyInput)) throw new BookAnalysisError('对白分片或记忆超过安全边界，未发起请求。');
+          value = await performRequest(entry, STORY_IDENTITY_PROTOCOL, STORY_IDENTITY_SYSTEM_PROMPT, storyInput,
+            storyRequestCost(STORY_IDENTITY_SYSTEM_PROMPT, storyInput, options.model));
+        } else value = await performRequest(entry, 'identity-v1', AI_BOOK_SYSTEM_PROMPT, input, estimateBookChunk(chapter, candidates, options.model, known).usd);
         if (!object(value) || !Array.isArray(value.identities) || value.identities.length > 12) throw new BookAnalysisError('模型人物证据格式不兼容，当前片段未保存。');
-        const rows = validateDeepAttributions(value, candidates, input);
+        let rows;
+        try { rows = story ? storyAttributions(value, candidates, input as StorySpeechInput) : validateDeepAttributions(value, candidates, input); }
+        catch { throw new BookAnalysisError('对白编号、人物 ID 或原文证据不匹配，当前分片未保存。'); }
         await session.check(); assertWork();
         const nextJob = clone(job!); const nextEntry = nextJob.chapters.find(item => item.id === entry.id)!;
         if (review) nextEntry.reviewCompleted = true; else { nextEntry.completedChunks = completedChunks; nextEntry.status = completedChunks === entry.totalChunks ? 'done' : 'running'; }
@@ -267,25 +439,45 @@ export function analyzeBook(options: BookAnalysisOptions): BookAnalysisControlle
         if (!review) nextJob.dialogueCount += candidates.length;
         nextJob.completedReviews = nextJob.chapters.filter(item => item.reviewCompleted && item.reviewCandidateIds.length > 0).length;
         nextJob.updatedAt = Date.now();
-        await saveAnalysisChunk(chapter, candidates, rows, options.model, undefined, assertWork, { sourceChapter: original, input, review, identities: value.identities as IdentityProposal[], commit: () => db.settings.put({ id: prefix + id, value: nextJob }).then(() => undefined) });
+        await saveAnalysisChunk(chapter, candidates, rows, options.model, undefined, assertWork, { sourceChapter: original, input, review, identities: value.identities as IdentityProposal[], commit: async () => {
+          if (await readOwner() !== ownerAtStart) throw new BookAnalysisError('书籍所属账号已变化，本分片未保存。');
+          await db.settings.put({ id: prefix + id, value: nextJob });
+        } });
         job = nextJob; Object.assign(entry, nextEntry); announce();
       };
       announce();
       abort = new AbortController();
       const preflight = await session.request({ action: 'status' }, abort.signal) as { ready?: boolean; protocols?: string[] };
       assertWork();
-      if (!preflight?.ready || !Array.isArray(preflight.protocols) || !preflight.protocols.includes('identity-v1')) throw new BookAnalysisError('当前云代理尚未支持整书人物协议，请先更新代理。');
+      const protocols = story ? [STORY_PLOT_PROTOCOL, STORY_IDENTITY_PROTOCOL] : ['identity-v1'];
+      if (!preflight?.ready || !Array.isArray(preflight.protocols) || protocols.some(protocol => !preflight.protocols!.includes(protocol))) throw new BookAnalysisError('当前云代理尚未支持本次整书分析协议，请先更新代理。');
       while (!cancelled) {
         await waitIfPaused();
-        await appendScope(await currentBoundary(options.bookId, source.chapters, options.mode));
+        await appendScope(await currentBoundary(options.bookId, planChapters, options.mode));
         for (const entry of [...job.chapters]) {
           if (entry.status === 'done') continue;
-          const original = source.chapters.find(chapter => chapter.id === entry.chapterId);
+          const original = chaptersById.get(entry.chapterId);
           if (!original) throw new BookAnalysisError('检查点章节已缺失。');
           const chapter = chapterAtBoundary(original, entry.scopeEnd)!;
           if (entry.signature !== await digest({ paragraphs: chapter.paragraphs, ids: entry.candidateIds })) throw new BookAnalysisError('章节检查点与原文不匹配，任务停止。');
-          const chunks = plannedChunks(chapter, new Set(entry.candidateIds));
+          const chunks = plannedChunks(chapter, new Set(entry.candidateIds), story);
           if (!Number.isInteger(entry.completedChunks) || entry.completedChunks < 0 || entry.completedChunks > chunks.length || entry.totalChunks !== chunks.length) throw new BookAnalysisError('分片检查点损坏，任务停止。');
+          if (story) {
+            const start = entry.plotFrom;
+            if (!start || start.chapterIndex !== chapter.index || !Number.isSafeInteger(start.paragraphIndex) || start.paragraphIndex < 0 ||
+              !Number.isSafeInteger(start.offset) || start.offset < 0) throw new BookAnalysisError('剧情检查点损坏，任务停止。');
+            const windows = plotWindows(chapter, start);
+            if (entry.plotRequests !== windows.length || !Number.isSafeInteger(entry.completedPlotRequests) ||
+              entry.completedPlotRequests! < 0 || entry.completedPlotRequests! > windows.length) throw new BookAnalysisError('剧情分片检查点损坏，任务停止。');
+            if (entry.completedPlotRequests! < windows.length) await persist({ status: 'running', stage: 'understanding', error: undefined });
+            for (let index = entry.completedPlotRequests!; index < windows.length; index++) await sendPlot(entry, windows[index], index);
+            if (!chunks.length) {
+              const current = job.chapters.find(item => item.id === entry.id)!;
+              current.status = 'done'; current.reviewCompleted = true;
+              await persist({});
+              continue;
+            }
+          }
           await persist({ status: 'running', stage: 'analyzing', error: undefined });
           for (let index = entry.completedChunks; index < chunks.length; index++) await sendChunk(entry, chunks[index], false, index + 1);
         }
@@ -294,17 +486,17 @@ export function analyzeBook(options: BookAnalysisOptions): BookAnalysisControlle
           if (entry.reviewCompleted) continue;
           if (!entry.reviewCandidateIds.length) {
             const records = await db.dialogues.bulkGet(entry.candidateIds);
-            const chapter = chapterAtBoundary(source.chapters.find(item => item.id === entry.chapterId)!, entry.scopeEnd)!;
-            const uncertain = new Set(records.filter(record => record && record.source !== 'manual' && (!record.characterId || record.confidence < 0.85)).map(record => record!.id));
-            entry.reviewCandidateIds = boundedReview(chapter, extractDialogues(chapter).filter(candidate => uncertain.has(candidate.id)), options.model).map(candidate => candidate.id);
+            const chapter = chapterAtBoundary(chaptersById.get(entry.chapterId)!, entry.scopeEnd)!;
+            const uncertain = new Set(records.filter(record => record && record.source !== 'manual' && record.verifiedQuote !== false && (!record.characterId || record.confidence < 0.85)).map(record => record!.id));
+            entry.reviewCandidateIds = boundedReview(chapter, (story ? extractStoryDialogues : extractDialogues)(chapter).filter(candidate => uncertain.has(candidate.id)), options.model, story).map(candidate => candidate.id);
             const current = job.chapters.find(item => item.id === entry.id)!; current.reviewCandidateIds = [...entry.reviewCandidateIds];
             if (!entry.reviewCandidateIds.length) { current.reviewCompleted = true; entry.reviewCompleted = true; }
             job.reviewRequests = job.chapters.filter(item => item.reviewCandidateIds.length > 0).length;
             await persist({});
           }
           if (entry.reviewCompleted) continue;
-          const chapter = chapterAtBoundary(source.chapters.find(item => item.id === entry.chapterId)!, entry.scopeEnd)!;
-          const selected = extractDialogues(chapter).filter(candidate => entry.reviewCandidateIds.includes(candidate.id));
+          const chapter = chapterAtBoundary(chaptersById.get(entry.chapterId)!, entry.scopeEnd)!;
+          const selected = (story ? extractStoryDialogues : extractDialogues)(chapter).filter(candidate => entry.reviewCandidateIds.includes(candidate.id));
           await sendChunk(entry, selected, true, entry.completedChunks);
         }
         await inspectMetrics();

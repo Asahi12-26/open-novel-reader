@@ -3,6 +3,7 @@ import { db } from '../core/db';
 import { compareAvatarRevisions, validAvatarRevision, validateAvatarImage } from '../core/avatar';
 import { bookAccountScope as accountScope, bookOwnerKey as ownerKey, bookOwnerScope, LEGACY_BOOK_ORIGIN_KEY as LEGACY_ORIGIN_KEY } from '../core/book-owner';
 import { MAX_FILE_BYTES, parseEpub, parseTxt } from '../core/parser';
+import { installBookStory, mergeBookStory, readBookStory, storyTables, validateBookStory, type BookStoryData } from '../core/story-data';
 import { defaultPreferences } from '../types';
 import { mergeCharacterIdentity, validCharacterIdentity, validIdentityGraph } from './character-identity';
 import type { AvatarRevision, Book, BookFile, Chapter, ReadingProgress, Bookmark, Character, CharacterAvatar, Dialogue, CharacterCorrection, AnalysisJob, Bookshelf, Preferences } from '../types';
@@ -14,6 +15,7 @@ export interface BookBundle {
   bookmarks: Bookmark[]; characters: Character[]; dialogues: Dialogue[];
   corrections: CharacterCorrection[]; jobs: AnalysisJob[];
   avatars?: AvatarRevision[];
+  story?: BookStoryData;
   file?: { name: string; mime: string; path: string };
 }
 interface CloudRow { id: string; payload: BookBundle; revision: number }
@@ -244,7 +246,7 @@ async function switchLocalBook(context: LocalAccountContext, bookId: string, exp
     selected = { schema: 1, book: { id: bookId, fingerprint: originalBook.fingerprint, format: originalBook.format, title: parsed.title, author: parsed.author, language: parsed.language, cover: parsed.cover, coverColor: originalBook.coverColor, totalWords: parsed.totalWords, chapterCount: parsed.chapters.length, createdAt: now, updatedAt: restoredAt || now, cloudEnabled: false, ...(restoredAt === undefined ? {} : { restoredAt }), ...(!explicitImport && originalBook.deletedAt !== undefined ? { deletedAt: originalBook.deletedAt } : {}) }, chapters: parsed.chapters, bookmarks: [], characters: [], dialogues: [], corrections: [], jobs: [], file: { name: file.name, mime: file.mime, path: `${context.userId}/${bookId}/original.${originalBook.format}` } };
   }
   await context.assertCurrent();
-  await db.transaction('rw', [db.books, db.chapters, db.progress, db.bookmarks, db.characters, db.dialogues, db.corrections, db.jobs, db.files, db.settings, db.avatars], async () => {
+  await db.transaction('rw', [db.books, db.chapters, db.progress, db.bookmarks, db.characters, db.dialogues, db.corrections, db.jobs, db.files, db.settings, db.avatars, ...storyTables()], async () => {
     context.assertLive();
     const current = await db.books.get(bookId);
     if (!current || ownerScope((await db.settings.get(ownerKey(bookId)))?.value) !== previousOwner || !equal(await bundleBook(current, previousUser, previousOwner), before)) throw new Error('本机阅读数据已更新，请重试导入或同步。');
@@ -256,6 +258,7 @@ async function switchLocalBook(context: LocalAccountContext, bookId: string, exp
     const selectedIds = new Set(selected.characters.map(character => character.id));
     await replaceLocalAvatars(bookId, savedAvatars?.filter(row => selectedIds.has(row.characterId)) || []);
     await replaceBookRows(selected);
+    await installBookStory(bookId, selected.story, true);
     await db.settings.put({ id: ownerKey(bookId), value: context.scope });
     context.assertLive();
   });
@@ -384,8 +387,15 @@ export function mergeBundles(local: BookBundle, remote: BookBundle, base: BookBu
   const corrections = new Map(merged.corrections.map(c => [c.dialogueId, c]));
   merged.dialogues = merged.dialogues.map(d => {
     const correction = corrections.get(d.id);
-    return correction ? { ...d, characterId: correction.characterId, source: 'manual', confidence: 1 } : { ...d, characterId: remap(d.characterId) };
+    return correction ? { ...d, characterId: correction.characterId, source: 'manual', confidence: 1, verifiedQuote: undefined, possibleCharacterIds: undefined }
+      : { ...d, characterId: remap(d.characterId), ...(d.possibleCharacterIds ? { possibleCharacterIds: d.possibleCharacterIds.filter(id => characters.has(id)) } : {}) };
   });
+  const sameStoryGeneration = (source: BookBundle) => source.book.deletedAt === undefined && generation(source.book) === generation(merged.book) ? source.story : undefined;
+  const story = mergeBookStory(mergeBookStory(sameStoryGeneration(listBase), sameStoryGeneration(local)), sameStoryGeneration(remote));
+  if (story) {
+    if (!validateBookStory(story, merged.book, merged.chapters, merged.characters, merged.dialogues)) throw new Error('剧情或人物关联存在冲突，本机记录已保留。');
+    merged.story = story;
+  }
   if (!validIdentityGraph(merged.characters, merged.chapters)) throw new Error('人物身份合并存在循环或冲突，本机记录保留，请手动复核。');
   return merged;
 }
@@ -404,8 +414,9 @@ async function bundleBook(book: Book, userId: string, scope = accountScope(getCl
     db.jobs.where('bookId').equals(book.id).toArray(), db.files.get(book.id), readLocalAvatars(book.id),
   ]);
   const sort = <T extends { id: string }>(rows: T[]) => rows.sort((a, b) => a.id.localeCompare(b.id));
+  const story = await readBookStory(book.id, scope, new Set(characters.map(row => row.id)));
   return { schema: 1, book, chapters, progress, bookmarks: sort(bookmarks), characters: sort(characters), dialogues: sort(dialogues), corrections: sort(corrections), jobs: sort(jobs),
-    ...(avatars.length ? { avatars: avatarManifest(avatars) } : {}), file: file ? { name: file.name, mime: file.mime, path } : undefined };
+    ...(avatars.length ? { avatars: avatarManifest(avatars) } : {}), ...(story ? { story } : {}), file: file ? { name: file.name, mime: file.mime, path } : undefined };
 }
 function validateAvatarManifest(bundle: BookBundle, characterIds = new Set(bundle.characters.map(character => character.id))) {
   const rows = bundle.avatars;
@@ -440,6 +451,10 @@ export function validateBundle(value: unknown, id: string): asserts value is Boo
     if (!location(d) || !integer(d.start) || !integer(d.end) || d.start >= d.end || d.end > paragraph!.length || paragraph!.slice(d.start, d.end) !== d.text || !Number.isFinite(d.confidence) || d.confidence < 0 || d.confidence > 1 || !['ai', 'manual'].includes(d.source) || !integer(d.updatedAt) || !(d.characterId === null || characterIds.has(d.characterId)) || (d.model !== undefined && !text(d.model, 100)) || (d.speakerLabel !== undefined && !text(d.speakerLabel, 80))) throw new Error('云端对白位置或来源无效。');
   }
   const dialogueIds = new Set(b.dialogues.map(d => d.id));
+  if (b.dialogues.some(row => (row.verifiedQuote !== undefined && (row.verifiedQuote !== false || row.source !== 'ai')) ||
+    (row.possibleCharacterIds !== undefined && (!Array.isArray(row.possibleCharacterIds) || row.possibleCharacterIds.length > 3 ||
+      row.possibleCharacterIds.some(id => !characterIds.has(id)) || new Set(row.possibleCharacterIds).size !== row.possibleCharacterIds.length)))) throw new Error('云端对白候选格式无效。');
+  if (b.story && !validateBookStory(b.story, b.book, b.chapters, b.characters, b.dialogues)) throw new Error('云端剧情数据格式无效，本机数据已保留。');
   if (b.corrections.some(c => !dialogueIds.has(c.dialogueId) || !(c.characterId === null || characterIds.has(c.characterId)) || !integer(c.updatedAt))) throw new Error('云端纠错数据无效。');
   if (b.jobs.some(j => !chapters.has(j.chapterId) || !['queued', 'running', 'paused', 'done', 'failed', 'cancelled'].includes(j.status) || !integer(j.completedChunks) || !integer(j.totalChunks) || j.completedChunks > j.totalChunks || !integer(j.updatedAt) || (j.error !== undefined && !text(j.error, 2000)))) throw new Error('云端任务无效。');
   if (b.file && (!text(b.file.name) || !text(b.file.mime, 200) || !text(b.file.path, 1000))) throw new Error('云端文件记录无效。');
@@ -489,6 +504,7 @@ async function uploadAvatarImages(bundle: BookBundle, rows: CharacterAvatar[], r
 async function applyBundle(bundle: BookBundle, context: AccountContext, revision: number, expectedLocal?: BookBundle, stagedAvatars?: CharacterAvatar[]) {
   const { userId, cloud } = context;
   context.assertLive();
+  if (bundle.story && !validateBookStory(bundle.story, bundle.book, bundle.chapters, bundle.characters, bundle.dialogues, context.scope)) throw new Error('云端剧情所属账号不匹配。');
   const current = await db.books.get(bundle.book.id);
   const previousOwner = ownerScope((await db.settings.get(ownerKey(bundle.book.id)))?.value);
   if (current && current.fingerprint !== bundle.book.fingerprint) throw new Error('书籍 ID 冲突，已保留本地版本。');
@@ -511,7 +527,7 @@ async function applyBundle(bundle: BookBundle, context: AccountContext, revision
     if (!equal(parsed.chapters, bundle.chapters)) throw new Error('云端章节与原文件不一致，已保留本地数据。');
   }
   await context.assertCurrent();
-  await db.transaction('rw', [db.books, db.chapters, db.progress, db.bookmarks, db.characters, db.dialogues, db.corrections, db.jobs, db.files, db.settings, db.avatars], async () => {
+  await db.transaction('rw', [db.books, db.chapters, db.progress, db.bookmarks, db.characters, db.dialogues, db.corrections, db.jobs, db.files, db.settings, db.avatars, ...storyTables()], async () => {
     context.assertLive();
     const latestBook = await db.books.get(id);
     if ((!current && latestBook) || ownerScope((await db.settings.get(ownerKey(id)))?.value) !== previousOwner) return;
@@ -536,6 +552,7 @@ async function applyBundle(bundle: BookBundle, context: AccountContext, revision
     else if (bundle.progress) await db.progress.put(bundle.progress);
     if (file) await db.files.put(file);
     await replaceLocalAvatars(id, avatars);
+    if (bundle.story || bundle.book.deletedAt) await installBookStory(id, bundle.story, true);
     await db.settings.put({ id: ownerKey(id), value: context.scope });
     await db.settings.put({ id: linkKey(context.scope, id), value: { revision, snapshot: bundle } satisfies Link });
     context.assertLive();
@@ -758,7 +775,7 @@ async function performSync(): Promise<SyncResult> {
         let chosen = local;
         const localChanged = !link || !equal(local, link.snapshot);
         if (row && (!link || row.revision !== link.revision)) {
-          const protectAnnotations = !row.payload.book.deletedAt && (local.characters.some(character => character.identity) || !!local.avatars?.length);
+          const protectAnnotations = !row.payload.book.deletedAt && (local.characters.some(character => character.identity) || !!local.avatars?.length || !!local.story);
           if (!localChanged && !protectAnnotations) {
             await applyBundle(row.payload, context, row.revision, local); result.downloaded++; remote.delete(book.id); return;
           }
@@ -781,6 +798,7 @@ async function performSync(): Promise<SyncResult> {
           // Validate both limits before any Storage write, including explicit restoration of a deleted cloud copy.
           assertCloudUploadLimits(chosen, original?.bytes.size || 0);
           validateAvatarManifest(chosen);
+          if (chosen.story && !validateBookStory(chosen.story, chosen.book, chosen.chapters, chosen.characters, chosen.dialogues, context.scope)) throw new Error('剧情数据或账号范围无效，本机数据已保留。');
           const avatars = await stageAvatarRows(chosen, context);
           if (!chosen.book.deletedAt && chosen.file && (!row || !row.payload.file || row.payload.book.deletedAt || missingRemoteFile)) {
             const fingerprint = [...new Uint8Array(await crypto.subtle.digest('SHA-256', await original!.bytes.arrayBuffer()))].map(n => n.toString(16).padStart(2, '0')).join('');

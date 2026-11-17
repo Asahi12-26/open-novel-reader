@@ -22,8 +22,11 @@ export interface CharacterIdentity {
 export interface Character { id: string; bookId: string; name: string; aliases: string[]; identity?: CharacterIdentity }
 export interface AvatarRevision { characterId: string; bookId: string; updatedAt: number; revision: string; digest?: string }
 export interface CharacterAvatar extends AvatarRevision { image?: Blob }
-export interface Dialogue { id: string; bookId: string; chapterId: string; paragraphIndex: number; start: number; end: number; text: string; characterId: string | null; confidence: number; source: 'ai' | 'manual'; model?: string; updatedAt: number; speakerLabel?: string }
+export interface Dialogue { id: string; bookId: string; chapterId: string; paragraphIndex: number; start: number; end: number; text: string; characterId: string | null; confidence: number; source: 'ai' | 'manual'; model?: string; updatedAt: number; speakerLabel?: string; verifiedQuote?: false; possibleCharacterIds?: string[] }
 export interface CharacterCorrection { id: string; dialogueId: string; bookId: string; characterId: string | null; updatedAt: number }
+export interface DialogueCorrectionRevision {
+  id: string; dialogueId: string; chapterId: string; bookId: string; previousCharacterId: string | null; characterId: string | null; updatedAt: number;
+}
 export interface AnalysisJob { id: string; bookId: string; chapterId: string; status: 'queued' | 'running' | 'paused' | 'done' | 'failed' | 'cancelled'; completedChunks: number; totalChunks: number; error?: string; updatedAt: number; model?: string; reservedUsd?: number; estimatedMaxUsd?: number }
 export interface Preferences { theme: 'light' | 'dark' | 'sepia'; fontFamily: 'serif' | 'sans'; fontSize: number; lineHeight: number; readerWidth: number; showCharacters: boolean; showAvatars?: boolean }
 export interface SyncState { id: string; updatedAt: number; lastSyncedAt?: number; error?: string }

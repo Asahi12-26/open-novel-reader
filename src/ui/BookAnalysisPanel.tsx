@@ -5,6 +5,9 @@ import { AI_MODELS, hasAIKey, type AIModel } from '../services/ai';
 import { analyzeBook, estimateBookAnalysis, listBookAnalysisJobs, MAX_BOOK_ANALYSIS_BUDGET_USD } from '../services/book-analysis';
 import type { BookAnalysisController, BookAnalysisEstimate, BookAnalysisJob, BookAnalysisMode } from '../services/book-analysis-types';
 import type { IdentityScope } from '../services/character-identity';
+import { listSeriesMemorySources } from '../services/series';
+import type { SeriesAccess } from '../core/series-types';
+import type { SeriesMemorySelection } from '../core/plot-types';
 import { Modal, notify, useQuery } from './common';
 
 const statusText: Record<BookAnalysisJob['status'], string> = {
@@ -12,16 +15,18 @@ const statusText: Record<BookAnalysisJob['status'], string> = {
   failed: '任务已安全停止', cancelled: '本次会话已停止', done: '整书分析完成',
 };
 const stageText: Record<BookAnalysisJob['stage'], string> = {
-  preparing: '预处理章节与对白', analyzing: '识别对白与统一人物', reviewing: '复核未知与冲突', done: '结果已保存',
+  preparing: '预处理章节与对白', understanding: '理解剧情并保存证据', analyzing: '识别对白与统一人物', reviewing: '复核未知与冲突', done: '结果已保存',
 };
 
-export default function BookAnalysisPanel({ bookId, chapters, dialogues, getCharacter, scope, showAll, openRevision = 0, onActivity, onClose, onViewResults }: {
+export default function BookAnalysisPanel({ bookId, chapters, dialogues, getCharacter, scope, showAll, summaryChapterId, seriesAccess, openRevision = 0, onActivity, onClose, onViewResults }: {
   bookId: string; chapters: Chapter[]; scope: IdentityScope; showAll: boolean;
   dialogues: readonly Dialogue[]; getCharacter: (id: string | null) => Character | undefined;
+  summaryChapterId?: string; seriesAccess: SeriesAccess;
   openRevision?: number; onActivity?: (active: boolean) => void;
   onClose: () => void; onViewResults: (chapter: Chapter, paragraphIndex: number) => void;
 }) {
-  const [mode, setMode] = useState<BookAnalysisMode>('reading-progress');
+  const [mode, setMode] = useState<BookAnalysisMode>(summaryChapterId ? 'deep' : 'reading-progress');
+  const [seriesMemory, setSeriesMemory] = useState<readonly SeriesMemorySelection[]>([]);
   const [model, setModel] = useState<AIModel>('deepseek-flash');
   const [budget, setBudget] = useState('0.10');
   const [authorized, setAuthorized] = useState(false);
@@ -40,12 +45,13 @@ export default function BookAnalysisPanel({ bookId, chapters, dialogues, getChar
   const initialized = useRef(false);
   const formEdited = useRef(false);
   const records = useQuery(async () => ({ loaded: true, jobs: await listBookAnalysisJobs(bookId) }), [bookId], { loaded: false, jobs: [] as BookAnalysisJob[] });
-  const jobs = useMemo(() => records.jobs.filter(item => item.bookId === bookId).sort((a, b) => b.updatedAt - a.updatedAt), [records.jobs, bookId]);
+  const jobs = useMemo(() => records.jobs.filter(item => item.bookId === bookId && item.summaryChapterId === summaryChapterId).sort((a, b) => b.updatedAt - a.updatedAt), [records.jobs, bookId, summaryChapterId]);
+  const sources = useQuery(() => summaryChapterId ? Promise.resolve([]) : listSeriesMemorySources(bookId, seriesAccess), [bookId, seriesAccess.origin, seriesAccess.userId, summaryChapterId], []);
   const saved = jobs.find(item => item.id === selectedId);
   const job = snapshot?.id === selectedId ? snapshot : saved;
   const chaptersById = useMemo(() => new Map(chapters.map(chapter => [chapter.id, chapter])), [chapters]);
   const visibleDialogues = useMemo(() => minimized ? [] : dialogues.filter(item => {
-    if (item.bookId !== bookId) return false;
+    if (item.bookId !== bookId || item.verifiedQuote === false) return false;
     if (showAll) return true;
     const index = chaptersById.get(item.chapterId)?.index;
     return index !== undefined && (index < scope.chapterIndex || (index === scope.chapterIndex && (item.paragraphIndex < scope.paragraphIndex || (item.paragraphIndex === scope.paragraphIndex && item.end <= scope.offset))));
@@ -59,7 +65,8 @@ export default function BookAnalysisPanel({ bookId, chapters, dialogues, getChar
 
   const selectJob = (next?: BookAnalysisJob) => {
     setSelectedId(next?.id || ''); setSnapshot(null); setError(''); setAuthorized(false); setPauseRequested(false);
-    setMode(next?.mode || 'reading-progress'); setModel(next?.model || 'deepseek-flash'); setBudget(next ? String(next.budgetUsd) : '0.10');
+    setMode(next?.mode || (summaryChapterId ? 'deep' : 'reading-progress')); setModel(next?.model || 'deepseek-flash'); setBudget(next ? String(next.budgetUsd) : '0.10');
+    setSeriesMemory(next?.seriesMemory || []);
   };
   useEffect(() => { setMinimized(false); }, [openRevision]);
   useEffect(() => { onActivity?.(working); }, [working, onActivity]);
@@ -80,26 +87,26 @@ export default function BookAnalysisPanel({ bookId, chapters, dialogues, getChar
     setEstimate(null); setEstimateError(''); setEstimating(true);
     // Scrolling must not start a full-book preprocessing pass for every character offset.
     const timer = setTimeout(() => {
-      void estimateBookAnalysis(bookId, model, mode).then(value => { if (!stale) setEstimate(value); }).catch(failure => {
+      void estimateBookAnalysis(bookId, model, mode, { summaryChapterId }).then(value => { if (!stale) setEstimate(value); }).catch(failure => {
         if (!stale) setEstimateError(failure instanceof Error ? failure.message : '无法计算分析范围，请检查本机书库。');
       }).finally(() => { if (!stale) setEstimating(false); });
     }, 350);
     return () => { stale = true; clearTimeout(timer); };
-  }, [bookId, model, mode, estimateScopeKey, locked, minimized]);
+  }, [bookId, model, mode, estimateScopeKey, locked, minimized, summaryChapterId]);
 
   async function start(resume: boolean) {
     if (controller.current || !authorized || !keyReady || !validBudget) return;
     formEdited.current = true;
     setAuthorized(false); setWorking(true); setPauseRequested(false); setError('');
     try {
-      const task = analyzeBook({ bookId, mode, model, budgetUsd: budgetValue, authorized: true, jobId: resume ? job?.id : undefined,
+      const task = analyzeBook({ bookId, mode, model, budgetUsd: budgetValue, authorized: true, jobId: resume ? job?.id : undefined, summaryChapterId, seriesMemory,
         onProgress: next => { if (mounted.current) { setSelectedId(next.id); setSnapshot(next); } },
       });
       controller.current = task;
       const result = await task.done;
       if (mounted.current) {
         setSelectedId(result.id); setSnapshot(result);
-        if (result.status === 'done') notify('整书分析完成，识别结果与人物信息已保存。');
+        if (result.status === 'done') notify(summaryChapterId ? '本章简介更新完成。' : '整书分析完成，剧情与人物结果已保存。');
       }
     } catch (failure) {
       if (mounted.current) setError(failure instanceof Error ? failure.message : '整书任务未能启动，已保存结果保留。');
@@ -129,33 +136,45 @@ export default function BookAnalysisPanel({ bookId, chapters, dialogues, getChar
     <button className="icon-button" aria-label="停止整书分析会话" onClick={close}><Square size={16}/></button>
   </aside>;
 
-  return <Modal title="整本书深度分析" onClose={close} wide>
-    <div className="ai-intro"><span><Sparkles size={25}/></span><div><h3>让整本书里的人物连起来</h3><p>按章节分批识别，统一人物、别名与证据，保留人工纠正。</p></div></div>
+  return <Modal title={summaryChapterId ? '重新生成章节简介' : '整本书深度分析'} onClose={close} wide>
+    <div className="ai-intro"><span><Sparkles size={25}/></span><div><h3>{summaryChapterId ? chaptersById.get(summaryChapterId)?.title : '先理解剧情，再识别对白'}</h3><p>{summaryChapterId ? '仅分析此章原文并更新简介，人工修订保留。' : '按章节保存有原文证据的剧情和关系，然后识别对白与复核人物。'}</p></div></div>
     <p className="muted">一次授权可在固定总预算内自动推进。本地预处理与查看结果不收费；不会把整本书一次发送给模型。</p>
     {jobs.length > 0 && <label className="form-label">本机任务记录<select aria-label="本机任务记录" value={selectedId} disabled={working} onChange={event => selectJob(jobs.find(item => item.id === event.target.value))}><option value="">新建整书任务</option>{jobs.map(item => <option key={item.id} value={item.id}>{item.mode === 'deep' ? '整本书' : '阅读进度'} · {statusText[item.status]} · {new Date(item.createdAt).toLocaleString()}</option>)}</select></label>}
-    <label className="form-label">分析范围<select aria-label="整书分析范围" value={mode} disabled={locked} onChange={event => updateForm(() => setMode(event.target.value as BookAnalysisMode))}><option value="reading-progress">阅读进度模式</option><option value="deep">整本书深度模式</option></select></label>
-    <p className="fine-print">{mode === 'reading-progress' ? '仅发送已读到的完整对白。本次活动会话可随阅读推进继续分析；可返回阅读，未读正文不会提前发送。关闭会话或重启应用后，必须重新载入密钥并授权。' : '明确选择后可分析全书。阅读界面默认按当前阅读位置隐藏未来人物名称、别名和身份揭示，不展示剧情摘要。'}</p>
+    {!summaryChapterId && <label className="form-label">分析范围<select aria-label="整书分析范围" value={mode} disabled={locked} onChange={event => updateForm(() => setMode(event.target.value as BookAnalysisMode))}><option value="reading-progress">阅读进度模式</option><option value="deep">整本书深度模式</option></select></label>}
+    {!summaryChapterId && <p className="fine-print">{mode === 'reading-progress' ? '仅发送已读正文和读到的完整对白。本次会话可随阅读推进，重启后要重新载入密钥并授权。' : '授权后可分析全书。阅读界面按当前阅读位置隐藏未来简介、别名和身份揭示。'}</p>}
+    {!summaryChapterId && (sources.length > 0 || seriesMemory.length > 0) && <fieldset className="series-memory-consent">
+      <legend>发送同系列的已读记忆（可选）</legend>
+      <p className="muted">逐本授权后，仅发送下列读到的位置以内、经筛选的结构化记忆。此处仅授权 AI 使用。</p>
+      {sources.map(source => <label className="checkbox-row" key={source.bookId}><input type="checkbox" checked={seriesMemory.some(entry => entry.bookId === source.bookId)}
+        disabled={locked || (seriesMemory.length >= 5 && !seriesMemory.some(entry => entry.bookId === source.bookId))} onChange={e => updateForm(() => setSeriesMemory(list => e.target.checked
+          ? [...list, { bookId: source.bookId, through: source.through }] : list.filter(entry => entry.bookId !== source.bookId)))}/>
+        {source.title} · {source.chapterTitle} · 第 {source.through.paragraphIndex + 1} 段 · 字符 {source.through.offset}
+      </label>)}
+      {job && seriesMemory.map(entry => <p className="fine-print" key={entry.bookId}>已保存授权上限 {sources.find(item => item.bookId === entry.bookId)?.title || '原选书籍'} 第 {entry.through.chapterIndex + 1} 章 · 第 {entry.through.paragraphIndex + 1} 段 · 字符 {entry.through.offset}</p>)}
+    </fieldset>}
     <label className="form-label">模型<select aria-label="整书分析模型" value={model} disabled={locked} onChange={event => updateForm(() => setModel(event.target.value as AIModel))}>{AI_MODELS.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
     {estimating && <p className="muted" role="status"><LoaderCircle className="spin" size={16}/>正在本机预处理与估算…</p>}
     {!locked && estimateError && <p className="inline-error" role="alert">{estimateError}</p>}
     {!locked && estimate && <div className="estimate-box" aria-label="整书费用估算">
       <div><span>{mode === 'deep' ? '全书范围' : '当前已读范围'}</span><strong>{estimate.chapterCount} / {estimate.totalChapters} 章 · {estimate.dialogueCount} 句对白</strong></div>
       <div><span>识别分片 / 复核请求上界</span><strong>{estimate.totalChunks} / {estimate.reviewRequests}</strong></div>
+      <div><span>剧情理解与简介分片</span><strong>{estimate.plotRequests ?? 0}</strong></div>
       <div><span>预计请求量（含必要复核）</span><strong>最多 {estimate.maxRequests} 次</strong></div>
       <div><span>费用估算范围</span><strong>${estimate.estimatedMinUsd.toFixed(4)}–${estimate.estimatedMaxUsd.toFixed(4)}</strong></div>
       <small>这是按公开价格和输出上限计算的预留范围，不是供应商账单硬上限。失败、取消或超时可能计费；重试不退回已预留费用。{mode === 'reading-progress' && ' 随阅读追加的内容仍受同一总预算限制。'}</small>
     </div>}
     <label className="form-label">整书任务累计总预算（美元）<input aria-label="整书任务累计总预算（美元）" type="number" min="0.001" max={MAX_BOOK_ANALYSIS_BUDGET_USD} step="0.001" value={budget} disabled={locked} onChange={event => updateForm(() => setBudget(event.target.value))}/></label>
     {!locked && validBudget && estimate && budgetValue < estimate.estimatedMaxUsd && <p className="inline-warning">总预算低于估算上界。任务只在总预算内推进，可能提前停止并保留已完成结果。</p>}
-    {!locked && mode === 'deep' && estimate?.dialogueCount === 0 && <p className="fine-print">当前版本未在这本书里定位到可分析的对白。</p>}
+    {!locked && mode === 'deep' && estimate?.dialogueCount === 0 && <p className="fine-print">暂无可识别对白，可生成有证据的剧情简介。</p>}
     {job && <p className="fine-print">原任务的模式、模型和总预算已固定。继续会保留全部费用预留；需要不同设置时，请明确新建任务。</p>}
     {!keyReady && <p className="inline-warning">需在「设置 → AI 模型」重新载入本次会话密钥。已保存结果和进度仍可查看，不会自动发起请求。</p>}
-    <label className="checkbox-row authorization"><input aria-label="授权整书任务" type="checkbox" checked={authorized} disabled={working} onChange={event => { formEdited.current = true; setAuthorized(event.target.checked); }}/>我明确同意发送上述范围内的对白、必要上下文及人物证据，授权本次整书会话在固定累计预算内自动推进与必要复核。{mode === 'reading-progress' && '本次活动会话可随我的阅读进度继续。'}失败后的收费重试须由我再次授权。</label>
+    <label className="checkbox-row authorization"><input aria-label="授权整书任务" type="checkbox" checked={authorized} disabled={working} onChange={event => { formEdited.current = true; setAuthorized(event.target.checked); }}/>我明确授权发送上述范围内的原文、必要人物证据及勾选的系列记忆，在固定累计预算内完成当前分析。{mode === 'reading-progress' && '本次活动会话可随我的阅读进度继续。'}失败后的收费重试须由我再次授权。</label>
     {error && <p className="inline-error" role="alert">{error}</p>}
     {job && <section className="job-status" aria-label="整书任务进度" aria-live="polite">
       <div><strong>{displayStatus}</strong><span>{stageText[job.stage]}</span></div>
       <progress aria-label="整书分析进度" max={Math.max(1, job.totalChunks)} value={job.completedChunks}/>
       <p>{job.completedChapters} / {job.chapters.length} 章节段 · {job.completedChunks} / {job.totalChunks} 分片 · {job.completedReviews} / {job.reviewRequests} 复核</p>
+      {!!job.plotRequests && <p>剧情分片 {job.completedPlotRequests ?? 0} / {job.plotRequests}</p>}
       <p className="fine-print">累计已预留 ${job.reservedUsd.toFixed(4)} / 总预算 ${job.budgetUsd.toFixed(4)}；包含失败请求与手动重试。</p>
       <p className="fine-print">当前任务已识别 {job.dialogueCount} 句对白 · {job.characterCount} 名人物 · {job.unknownCount} 句未知或待确认。</p>
       {job.status === 'waiting' && working && <p className="inline-warning">已追上当前阅读位置，正在等待阅读推进。点击「返回阅读并继续任务」即可翻页；不会发送未来内容。</p>}
@@ -167,7 +186,7 @@ export default function BookAnalysisPanel({ bookId, chapters, dialogues, getChar
         <button className="secondary" onClick={() => { if (pauseRequested) controller.current?.resume(); else controller.current?.pause(); setPauseRequested(!pauseRequested); }}>{pauseRequested ? <Play size={16}/> : <Pause size={16}/>} {pauseRequested ? '继续整书会话' : '当前分片后暂停整书任务'}</button>
         <button className="secondary" onClick={() => controller.current?.cancel()}><Square size={15}/>取消整书任务</button>
       </> : <>
-        {!job && <button className="primary" disabled={!authorized || !keyReady || !validBudget || !estimate || estimating || (mode === 'deep' && !estimate.dialogueCount)} onClick={() => void start(false)}><Sparkles size={16}/>授权并开始整书分析</button>}
+        {!job && <button className="primary" disabled={!authorized || !keyReady || !validBudget || !estimate || estimating || (mode === 'deep' && !estimate.maxRequests)} onClick={() => void start(false)}><Sparkles size={16}/>{summaryChapterId ? '授权并重新生成简介' : '授权并开始整书分析'}</button>}
         {resumable && <button className="primary" disabled={!authorized || !keyReady || !validBudget || budgetValue <= job.reservedUsd} onClick={() => void start(true)}><RotateCcw size={16}/>授权并继续整书任务</button>}
         {job && <button className="secondary" onClick={() => selectJob()}>新建整书任务</button>}
       </>}

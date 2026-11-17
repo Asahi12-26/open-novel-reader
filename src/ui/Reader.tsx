@@ -12,8 +12,11 @@ import BookAnalysisPanel from './BookAnalysisPanel';
 import { compareIdentityLocations, createIdentityProjector, type IdentityScope } from '../services/character-identity';
 import { CharacterAvatarView } from './CharacterAvatar';
 import CharacterGallery, { type CharacterProfile } from './CharacterGallery';
+import ChapterSummary from './ChapterSummary';
+import { loadSeriesAvatars } from '../services/series';
+import type { SeriesAccess } from '../core/series-types';
 
-interface Props { book: Book; chapters: Chapter[]; progress?: ReadingProgress; fromOcean?: boolean; preferences: Preferences; onPreferences: (patch: Partial<Preferences>) => void; onClose: () => void }
+interface Props { book: Book; chapters: Chapter[]; progress?: ReadingProgress; fromOcean?: boolean; preferences: Preferences; seriesAccess: SeriesAccess; onPreferences: (patch: Partial<Preferences>) => void; onClose: () => void }
 function characterRect(element: HTMLElement, offset: number): DOMRect {
   const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, { acceptNode: node => node.parentElement?.closest('[data-reading-decoration]') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
   let node: Node | null; let left = Math.max(0,offset);
@@ -28,7 +31,7 @@ function scrollToAnchor(root: HTMLElement, paragraph: HTMLElement, offset: numbe
   const rect = offset ? characterRect(paragraph,offset) : paragraph.getBoundingClientRect();
   root.scrollTop += rect.top-root.getBoundingClientRect().top-110;
 }
-export default function Reader({ book, chapters, progress, fromOcean = true, preferences, onPreferences, onClose }: Props) {
+export default function Reader({ book, chapters, progress, fromOcean = true, preferences, seriesAccess, onPreferences, onClose }: Props) {
   const first = Math.max(0, chapters.findIndex(c => c.id === progress?.chapterId));
   const [index, setIndex] = useState(first);
   const [toc, setToc] = useState(false);
@@ -37,6 +40,8 @@ export default function Reader({ book, chapters, progress, fromOcean = true, pre
   const [bookAnalysis, setBookAnalysis] = useState(false);
   const [bookAnalysisRevision, setBookAnalysisRevision] = useState(0);
   const [bookTaskActive, setBookTaskActive] = useState(false);
+  const [summaryChapterId, setSummaryChapterId] = useState<string | null>(null);
+  const [regenerateChapterId, setRegenerateChapterId] = useState<string | undefined>();
   const [showAllCharacters, setShowAllCharacters] = useState(false);
   const [bookmarkList, setBookmarkList] = useState(false);
   const [characterPanel, setCharacterPanel] = useState(false);
@@ -77,10 +82,18 @@ export default function Reader({ book, chapters, progress, fromOcean = true, pre
   const marks = useQuery(() => db.bookmarks.where('bookId').equals(book.id).toArray(), [book.id], []);
   const characters = useQuery(() => db.characters.where('bookId').equals(book.id).toArray(), [book.id], []);
   const dialogues = useQuery(() => db.dialogues.where('chapterId').equals(chapter.id).toArray(), [chapter.id], []);
+  const dialogueRevisions = useQuery(() => selectedDialogue
+    ? db.dialogueCorrectionRevisions.where('dialogueId').equals(selectedDialogue.id).and(row => row.bookId === book.id).toArray()
+    : Promise.resolve([]), [book.id, selectedDialogue?.id], []);
   const allDialogues = useQuery(() => db.dialogues.where('bookId').equals(book.id).toArray(), [book.id], []);
+  const chapterSummaries = useQuery(() => db.chapterSummaries.where('bookId').equals(book.id).toArray(), [book.id], []);
   const avatars = useQuery(() => db.avatars.where('bookId').equals(book.id).toArray(), [book.id], []);
   const identityScope = useMemo<IdentityScope>(() => ({ chapterIndex: chapter.index, paragraphIndex: position, offset: positionOffset }), [chapter.index, position, positionOffset]);
-  const projectIdentities = useMemo(() => createIdentityProjector(characters, allDialogues, chapters), [characters, allDialogues, chapters]);
+  const seriesAvatars = useQuery(async () => ({
+    chapterIndex: identityScope.chapterIndex, paragraphIndex: identityScope.paragraphIndex, offset: identityScope.offset,
+    images: await loadSeriesAvatars(book.id, identityScope, seriesAccess),
+  }), [book.id, seriesAccess.origin, seriesAccess.userId, identityScope.chapterIndex, identityScope.paragraphIndex, identityScope.offset], null);
+  const projectIdentities = useMemo(() => createIdentityProjector(characters, allDialogues.filter(row => row.verifiedQuote !== false), chapters), [characters, allDialogues, chapters]);
   const identities = useMemo(() => projectIdentities(identityScope, showAllCharacters), [projectIdentities, identityScope, showAllCharacters]);
   const avatarById = useMemo(() => new Map(avatars.filter(avatar => avatar.bookId === book.id).map(avatar => [avatar.characterId, avatar])), [avatars, book.id]);
   const visibleAvatarById = useMemo(() => {
@@ -91,10 +104,12 @@ export default function Reader({ book, chapters, progress, fromOcean = true, pre
         .map(member => avatarById.get(member.id))
         .filter(avatar => avatar?.image)
         .sort((left, right) => right!.updatedAt - left!.updatedAt || left!.characterId.localeCompare(right!.characterId))[0]?.image;
-      if (image) images.set(person.id, image);
+      const shared = seriesAvatars && compareIdentityLocations(seriesAvatars, identityScope) <= 0
+        ? seriesAvatars.images.get(person.id) : undefined;
+      if (image || (!own && shared)) images.set(person.id, image || shared!);
     }
     return images;
-  }, [identities, avatarById]);
+  }, [identities, avatarById, seriesAvatars, identityScope]);
   const profiles = useMemo(() => {
     const result = new Map<string, CharacterProfile>();
     if (!characterPanel) return result;
@@ -103,7 +118,7 @@ export default function Reader({ book, chapters, progress, fromOcean = true, pre
     const relevant = new Map<string, Dialogue[]>();
     for (const dialogue of allDialogues) {
       const source = byId.get(dialogue.chapterId);
-      if (!source || source.bookId !== book.id || dialogue.bookId !== book.id) continue;
+      if (!source || source.bookId !== book.id || dialogue.bookId !== book.id || dialogue.verifiedQuote === false) continue;
       if (!showAllCharacters && compareIdentityLocations({ chapterIndex: source.index, paragraphIndex: dialogue.paragraphIndex, offset: dialogue.end }, identityScope) > 0) continue;
       const person = identities.character(dialogue.characterId);
       if (!person) continue;
@@ -132,7 +147,7 @@ export default function Reader({ book, chapters, progress, fromOcean = true, pre
   const dialoguesByParagraph = useMemo(() => {
     const rows = new Map<number, Dialogue[]>();
     for (const dialogue of dialogues) {
-      if (dialogue.chapterId !== chapter.id || dialogue.bookId !== book.id) continue;
+      if (dialogue.chapterId !== chapter.id || dialogue.bookId !== book.id || dialogue.verifiedQuote === false) continue;
       const paragraph = rows.get(dialogue.paragraphIndex);
       if (paragraph) paragraph.push(dialogue);
       else rows.set(dialogue.paragraphIndex, [dialogue]);
@@ -216,6 +231,32 @@ export default function Reader({ book, chapters, progress, fromOcean = true, pre
     const mark: Bookmark = { id: crypto.randomUUID(), bookId: book.id, chapterId: chapter.id, paragraphIndex: p, label: chapter.paragraphs[p]?.slice(0,70) || chapter.title, createdAt: Date.now() };
     await db.bookmarks.put(mark);
   }, '已为当前段落添加书签');
+  const openPerson = (id: string) => {
+    if (!identities.character(id)) return;
+    setSummaryChapterId(null);
+    setSelectedCharacterId(id);
+    setCharacterPanel(true);
+  };
+  const regenerateSummary = (id: string) => {
+    if (bookTaskActive) { notify('请先结束当前分析任务。'); return; }
+    setSummaryChapterId(null);
+    setRegenerateChapterId(id);
+    setBookAnalysis(true);
+    setBookAnalysisRevision(value => value + 1);
+  };
+  const lastParagraph = Math.max(0, chapter.paragraphs.length - 1);
+  const lastOffset = chapter.paragraphs[lastParagraph]?.length || 0;
+  const recapChapter = chapters.find(item => item.id === summaryChapterId);
+  const summaryIdentity = showAllCharacters ? projectIdentities(identityScope) : identities;
+  const knownSummaries = chapterSummaries.filter(item => (chapters.find(c => c.id === item.chapterId)?.index ?? Infinity) <= identityScope.chapterIndex);
+  const chapterRead = identityScope.paragraphIndex === lastParagraph && identityScope.offset >= lastOffset;
+  const markChapterRead = () => {
+    const end = { chapterId: chapter.id, paragraphIndex: lastParagraph, offset: lastOffset };
+    latest.current = end;
+    setPosition(lastParagraph);
+    setPositionOffset(lastOffset);
+    void run(() => saveProgress(book.id, chapter.id, lastParagraph, lastOffset));
+  };
   function renderParagraph(text: string, p: number): ReactNode {
     const showAvatars = preferences.showAvatars !== false;
     if (!preferences.showCharacters && !showAvatars) return text;
@@ -230,7 +271,7 @@ export default function Reader({ book, chapters, progress, fromOcean = true, pre
       parts.push(<span className="dialogue-text" key={d.id}>
         {text.slice(d.start,d.end)}
         {showAvatars && <button type="button" data-reading-decoration className="dialogue-avatar-trigger" aria-label={person ? `查看人物 ${name} 的头像与资料` : '未知人物头像，点击纠正'} onClick={() => {
-          if (person) { setSelectedCharacterId(person.id); setCharacterPanel(true); }
+          if (person) openPerson(person.id);
           else setSelectedDialogue(d);
         }}><CharacterAvatarView character={person} image={person && visibleAvatarById.get(person.id)} size="inline"/></button>}
         {preferences.showCharacters && <button type="button" data-reading-decoration className={`character-tag ${d.source === 'manual' ? 'manual' : ''}`} aria-label={`说话人物：${name}，点击纠正`} onClick={() => setSelectedDialogue(d)}>{name}{d.source === 'manual' && <Check size={9}/>}</button>}
@@ -241,21 +282,27 @@ export default function Reader({ book, chapters, progress, fromOcean = true, pre
   const close = () => { const p = latest.current; void run(() => saveProgress(book.id,p.chapterId,p.paragraphIndex,p.offset)); onClose(); };
   return <motion.section layoutRoot className="reader ocean-reader" data-cover-phase={coverPhase} role="dialog" aria-modal="true" aria-label={`阅读 ${book.title}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: reduced ? 0 : present ? .22 : .48 }}>
     {centralCover && <div className="reader-cover-flight" aria-hidden="true"><motion.div className="reader-cover-tilt" animate={{ opacity: !mobileCover || coverPhase === 'expand' || coverPhase === 'open' || !present ? 1 : 0 }} transition={{ duration: .18 }}><span className="reader-cover-pages"/><motion.div className="reader-cover-front" initial={{ rotateY: 0 }} animate={{ rotateY: present && coverPhase === 'open' ? -28 : 0 }} transition={{ duration: .22 }}><BookCover book={book} duration={present ? mobileCover ? .26 : .36 : .46}/></motion.div></motion.div></div>}
-    <aside className={`reader-sidebar ${toc ? 'is-open' : ''}`}><button className="reader-back" onClick={close}><ArrowLeft size={18}/>回到书架</button><div className="reader-book"><BookCover key={centralCover ? 'static-cover' : 'shared-cover'} book={book} shared={fromOcean && !centralCover} className={coverPhase === 'expand' || coverPhase === 'open' ? 'reader-cover-placeholder' : ''} duration={coverPhase === 'settle' ? .18 : .46}/><h2>{book.title}</h2><p>{book.author || '佚名'}</p></div><div className="toc-heading"><h3>目录</h3><span>{chapters.length} 章</span><button className="icon-button mobile-only" aria-label="关闭目录" onClick={() => setToc(false)}><X size={18}/></button></div><nav className="toc-list">{chapters.map((c,i) => <button key={c.id} className={i === index ? 'active' : ''} onClick={() => goChapter(i)}><span>{String(i+1).padStart(2,'0')}</span>{c.title}{i === index && <i/>}</button>)}</nav><div className="reader-sidebar-note"><span className="status-dot"/>离线可用 · 位置自动保存</div></aside>
+    <aside className={`reader-sidebar ${toc ? 'is-open' : ''}`}><button className="reader-back" onClick={close}><ArrowLeft size={18}/>回到书架</button><div className="reader-book"><BookCover key={centralCover ? 'static-cover' : 'shared-cover'} book={book} shared={fromOcean && !centralCover} className={coverPhase === 'expand' || coverPhase === 'open' ? 'reader-cover-placeholder' : ''} duration={coverPhase === 'settle' ? .18 : .46}/><h2>{book.title}</h2><p>{book.author || '佚名'}</p></div><div className="toc-heading"><h3>目录</h3><span>{chapters.length} 章</span><button className="icon-button mobile-only" aria-label="关闭目录" onClick={() => setToc(false)}><X size={18}/></button></div><nav className="toc-list">{chapters.map((c,i) => <button key={c.id} className={i === index ? 'active' : ''} onClick={() => goChapter(i)}><span>{String(i+1).padStart(2,'0')}</span>{c.title}{i === index && <i/>}</button>)}{knownSummaries.length > 0 && <div className="chapter-recap-index"><strong>已保存的章节简介</strong>{knownSummaries.map(item => { const source = chapters.find(c => c.id === item.chapterId)!; if (source.index === index && !chapterRead) return null; return <button key={source.id} aria-label={`打开第 ${source.index + 1} 章简介`} onClick={() => { setToc(false); setSummaryChapterId(source.id); }}>第 {source.index + 1} 章简介</button>; })}</div>}</nav><div className="reader-sidebar-note"><span className="status-dot"/>离线可用 · 位置自动保存</div></aside>
     {toc && <button className="toc-scrim" aria-label="收起目录" onClick={() => setToc(false)}/>}
     <div className="reader-main"><header className="reader-toolbar"><div className="reader-toolbar-left"><button className="icon-button mobile-only" aria-label="返回书架" onClick={close}><ArrowLeft size={20}/></button><button className="icon-button mobile-only" aria-label="展开目录" onClick={() => setToc(true)}><List size={20}/></button><span>{book.title}</span></div><div className="reader-tools"><button className="icon-button" title="添加书签" aria-label="添加当前段落书签" onClick={() => void addBookmark()}><BookmarkIcon size={18}/></button><button className="icon-button" title="全部书签" aria-label="查看全部书签" onClick={() => setBookmarkList(true)}><List size={18}/></button><button className="icon-button" title="人物管理" aria-label="人物管理" onClick={() => { setSelectedCharacterId(null); setCharacterPanel(true); }}><Users size={18}/></button><button className="ai-toolbar" aria-label="章节人物识别" title="章节人物识别" onClick={() => setAnalysis(true)}><Sparkles size={16}/><span>人物识别</span></button><button className={`icon-button ${appearance ? 'active' : ''}`} aria-label="阅读排版设置" onClick={() => setAppearance(!appearance)}><Settings2 size={20}/></button></div></header>
       {appearance && <div className="appearance-panel"><div className="panel-title">让文字，适合你的眼睛<button className="icon-button" aria-label="关闭排版设置" onClick={() => setAppearance(false)}><X size={17}/></button></div><label>字号 <span>{preferences.fontSize}px</span><input aria-label="字号" type="range" min="14" max="36" value={preferences.fontSize} onChange={e => onPreferences({fontSize:Number(e.target.value)})}/></label><label>行距 <span>{preferences.lineHeight.toFixed(1)}</span><input aria-label="行距" type="range" min="1.3" max="2.6" step="0.1" value={preferences.lineHeight} onChange={e => onPreferences({lineHeight:Number(e.target.value)})}/></label><label>页宽 <span>{preferences.readerWidth}px</span><input aria-label="页宽" type="range" min="420" max="1000" step="20" value={preferences.readerWidth} onChange={e => onPreferences({readerWidth:Number(e.target.value)})}/></label><label>字体<select aria-label="字体" value={preferences.fontFamily} onChange={e => onPreferences({fontFamily:e.target.value as Preferences['fontFamily']})}><option value="serif">宋体 / Georgia</option><option value="sans">黑体 / Sans serif</option></select></label><div className="theme-choices">{(['light','sepia','dark'] as const).map((t,i) => <button key={t} className={`theme-chip ${t} ${preferences.theme === t ? 'chosen' : ''}`} onClick={() => onPreferences({theme:t})}>{['纸白','暖笺','夜读'][i]}{preferences.theme === t && <Check size={13}/>}</button>)}</div><label className="checkbox-row"><input type="checkbox" checked={preferences.showCharacters} onChange={e => onPreferences({showCharacters:e.target.checked})}/>显示对白人物标签</label><label className="checkbox-row"><input type="checkbox" checked={preferences.showAvatars !== false} onChange={e => onPreferences({showAvatars:e.target.checked})}/>显示对白人物头像</label></div>}
-      <div ref={scroller} className="reader-scroller" tabIndex={0} aria-label="小说正文"><article className={`reader-article ${preferences.fontFamily}`} style={{'--reader-font-size':`${preferences.fontSize}px`,'--reader-line-height':preferences.lineHeight,'--reader-width':`${preferences.readerWidth}px`} as CSSProperties} lang={book.language || 'zh'}><div className="chapter-eyebrow">CHAPTER {String(index+1).padStart(2,'0')} <span/> {book.format.toUpperCase()}</div><h1>{chapter.title}</h1><div className="chapter-ornament">✦</div>{chapter.paragraphs.map((p,i) => <p key={`${chapter.id}:${i}`} data-paragraph={i} id={`para-${i}`}>{renderParagraph(p,i)}</p>)}<div className="chapter-end"><span>· · ·</span><p>{index === chapters.length-1 ? '故事暂告一段落，生活仍在继续。' : '下一页，还有新的故事。'}</p><button className="secondary" onClick={() => index < chapters.length-1 ? goChapter(index+1) : close()}>{index < chapters.length-1 ? '阅读下一章' : '回到书架'}<ArrowRight size={16}/></button></div></article></div>
+      <div ref={scroller} className="reader-scroller" tabIndex={0} aria-label="小说正文"><article className={`reader-article ${preferences.fontFamily}`} style={{'--reader-font-size':`${preferences.fontSize}px`,'--reader-line-height':preferences.lineHeight,'--reader-width':`${preferences.readerWidth}px`} as CSSProperties} lang={book.language || 'zh'}><div className="chapter-eyebrow">CHAPTER {String(index+1).padStart(2,'0')} <span/> {book.format.toUpperCase()}</div><h1>{chapter.title}</h1><div className="chapter-ornament">✦</div>{chapter.paragraphs.map((p,i) => <p key={`${chapter.id}:${i}`} data-paragraph={i} id={`para-${i}`}>{renderParagraph(p,i)}</p>)}<div className="chapter-end"><span>· · ·</span>{!chapterRead && <button className="text-button" onClick={markChapterRead}>标记本章读完</button>}<ChapterSummary chapter={chapter} scope={identityScope} resolveCharacter={summaryIdentity.character} onCharacter={openPerson} onRegenerate={() => regenerateSummary(chapter.id)}/><p>{index === chapters.length-1 ? '故事暂告一段落，生活仍在继续。' : '下一页，还有新的故事。'}</p><button className="secondary" onClick={() => index < chapters.length-1 ? goChapter(index+1) : close()}>{index < chapters.length-1 ? '阅读下一章' : '回到书架'}<ArrowRight size={16}/></button></div></article></div>
       <footer className="reader-footer"><button disabled={index === 0} onClick={() => goChapter(index-1)} aria-label="上一章"><ChevronLeft size={17}/><span>上一章</span></button><span className="reader-position">{chapter.title}<small>{index+1} / {chapters.length} 章 · {percentage}%</small></span><button disabled={index === chapters.length-1} onClick={() => goChapter(index+1)} aria-label="下一章"><span>下一章</span><ChevronRight size={17}/></button></footer><div className="reader-progress"><i style={{width:`${percentage}%`}}/></div>
     </div>
     {bookmarkList && <Modal title="故事里的停靠点" onClose={() => setBookmarkList(false)}>{marks.length ? <div className="bookmark-list">{marks.map(m => <div key={m.id}><button onClick={() => goChapter(chapters.findIndex(c => c.id === m.chapterId),m.paragraphIndex)}><small>{chapters.find(c => c.id === m.chapterId)?.title}</small>{m.label}</button><button className="icon-button" aria-label="删除书签" onClick={() => void run(() => db.bookmarks.delete(m.id))}><X size={17}/></button></div>)}</div> : <div className="modal-empty"><BookmarkIcon size={30}/><p>读到喜欢的段落，就为它留一个书签。</p></div>}</Modal>}
-    {analysis && <AnalysisPanel chapter={chapter} scope={identityScope} getCharacter={identities.character} showAll={showAllCharacters} blockedByBookTask={bookTaskActive} onOpenBookAnalysis={() => { setAnalysis(false); setBookAnalysis(true); setBookAnalysisRevision(value => value + 1); }} onClose={() => setAnalysis(false)} onViewResults={target => { setAnalysis(false); void goChapter(chapters.findIndex(item => item.id === target.id)); }}/>}
-    {bookAnalysis && <BookAnalysisPanel bookId={book.id} chapters={chapters} dialogues={allDialogues} scope={identityScope} getCharacter={identities.character} showAll={showAllCharacters} openRevision={bookAnalysisRevision} onActivity={setBookTaskActive} onClose={() => { setBookAnalysis(false); setBookTaskActive(false); }} onViewResults={(target, paragraphIndex) => void goChapter(chapters.findIndex(item => item.id === target.id), paragraphIndex)}/>}
+    {analysis && <AnalysisPanel chapter={chapter} scope={identityScope} getCharacter={identities.character} showAll={showAllCharacters} blockedByBookTask={bookTaskActive} onOpenBookAnalysis={() => { setAnalysis(false); setRegenerateChapterId(undefined); setBookAnalysis(true); setBookAnalysisRevision(value => value + 1); }} onClose={() => setAnalysis(false)} onViewResults={target => { setAnalysis(false); void goChapter(chapters.findIndex(item => item.id === target.id)); }}/>}
+    {bookAnalysis && <BookAnalysisPanel key={regenerateChapterId ?? "whole-book"} summaryChapterId={regenerateChapterId} seriesAccess={seriesAccess} bookId={book.id} chapters={chapters} dialogues={allDialogues} scope={identityScope} getCharacter={identities.character} showAll={showAllCharacters} openRevision={bookAnalysisRevision} onActivity={setBookTaskActive} onClose={() => { setBookAnalysis(false); setBookTaskActive(false); setRegenerateChapterId(undefined); }} onViewResults={(target, paragraphIndex) => void goChapter(chapters.findIndex(item => item.id === target.id), paragraphIndex)}/>}
+    {recapChapter && <ChapterSummary chapter={recapChapter} scope={identityScope} resolveCharacter={summaryIdentity.character} onCharacter={openPerson} onRegenerate={() => regenerateSummary(recapChapter.id)} onClose={() => setSummaryChapterId(null)}/>}
     {selectedDialogue && <Modal title="这一句，是谁说的？" onClose={() => setSelectedDialogue(null)}>
       <blockquote className="dialogue-quote">{selectedDialogue.text}</blockquote>
       <p className="muted">人工纠正会优先保留，不会被后续 AI 分析覆盖。人物选项默认只显示当前阅读范围内的身份。</p>
+      {!!selectedDialogue.possibleCharacterIds?.length && <p className="muted">可供复核的人物 {selectedDialogue.possibleCharacterIds.map(id => identities.character(id)?.name).filter(Boolean).join("、") || "未知"}</p>}
       <div className="character-choices"><button onClick={() => void run(async () => { await correctDialogue(selectedDialogue.id, null); setSelectedDialogue(null); })}>未知人物</button>{identities.characters.map(person => <button key={person.id} onClick={() => void run(async () => { await correctDialogue(selectedDialogue.id, person.id); setSelectedDialogue(null); })}><CharacterAvatarView character={person} image={visibleAvatarById.get(person.id)} size="inline"/>{person.name}</button>)}</div>
       <form className="inline-form" onSubmit={event => { event.preventDefault(); if (!newName.trim()) return; void run(async () => { const person = await createCharacter(book.id, newName, identityScope); await correctDialogue(selectedDialogue.id, person.id); setNewName(''); setSelectedDialogue(null); }); }}><input aria-label="新人物名称" value={newName} onChange={event => setNewName(event.target.value)} maxLength={80} placeholder="或新建人物"/><button className="secondary" type="submit">新建并指定</button></form>
+      {dialogueRevisions.some(row => row.dialogueId === selectedDialogue.id) && <details className="dialogue-revisions"><summary>人工纠正记录</summary><ol>{dialogueRevisions.filter(row => row.dialogueId === selectedDialogue.id).sort((a, b) => b.updatedAt - a.updatedAt).map(row => <li key={row.id}>
+        <span>{identities.character(row.previousCharacterId)?.name ?? '未知人物'} → {identities.character(row.characterId)?.name ?? '未知人物'}</span>
+        <time dateTime={new Date(row.updatedAt).toISOString()}>{new Date(row.updatedAt).toLocaleString()}</time>
+      </li>)}</ol></details>}
     </Modal>}
     {characterPanel && <CharacterGallery bookId={book.id} people={identities.characters} getProfile={id => profiles.get(id)}
       selectedId={selectedCharacterId ? identities.character(selectedCharacterId)?.id ?? null : null} onSelect={setSelectedCharacterId}

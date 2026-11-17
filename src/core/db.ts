@@ -1,5 +1,8 @@
 import Dexie, { type Table } from 'dexie';
 import type { AnalysisJob, Book, BookFile, Bookmark, Bookshelf, Chapter, Character, CharacterAvatar, CharacterCorrection, Dialogue, ReadingProgress, SyncState } from '../types';
+import type { Series, SeriesBook, SeriesCharacter, SeriesCharacterLink } from './series-types';
+import type { ChapterSummaryRecord, PlotEventRecord } from './plot-types';
+import type { DialogueCorrectionRevision } from '../types';
 
 export interface Setting { id: string; value: unknown }
 
@@ -18,6 +21,13 @@ export class ReaderDatabase extends Dexie {
   jobs!: Table<AnalysisJob, string>;
   settings!: Table<Setting, string>;
   syncState!: Table<SyncState, string>;
+  series!: Table<Series, string>;
+  seriesBooks!: Table<SeriesBook, string>;
+  seriesCharacters!: Table<SeriesCharacter, string>;
+  seriesCharacterLinks!: Table<SeriesCharacterLink, string>;
+  plotEvents!: Table<PlotEventRecord, string>;
+  chapterSummaries!: Table<ChapterSummaryRecord, string>;
+  dialogueCorrectionRevisions!: Table<DialogueCorrectionRevision, string>;
 
   constructor(name = 'open-novel-reader') {
     super(name);
@@ -36,6 +46,15 @@ export class ReaderDatabase extends Dexie {
       syncState: 'id, updatedAt',
     });
     this.version(2).stores({ avatars: 'characterId, bookId' });
+    this.version(3).stores({
+      series: 'id, scope',
+      seriesBooks: 'id, scope, bookId, seriesId',
+      seriesCharacters: 'id, scope, seriesId',
+      seriesCharacterLinks: 'id, scope, bookId, seriesId, seriesCharacterId',
+      plotEvents: 'id, bookId, chapterId',
+      chapterSummaries: 'chapterId, bookId',
+      dialogueCorrectionRevisions: 'id, bookId, chapterId, dialogueId',
+    });
   }
 }
 

@@ -22,7 +22,7 @@ export default function AnalysisPanel({ chapter, scope, getCharacter, showAll = 
   const savedJobs = useQuery(() => db.jobs.where('chapterId').equals(selected.id).and(item => item.bookId === chapter.bookId).toArray(), [selected.id, chapter.bookId], [] as AnalysisJob[]);
   const savedDialogues = useQuery(() => db.dialogues.where('chapterId').equals(selected.id).and(item => item.bookId === chapter.bookId).toArray(), [selected.id, chapter.bookId], [] as Dialogue[]);
   // Live queries keep their previous value until the next chapter's read finishes.
-  const dialogues = savedDialogues.filter(item => item.chapterId === selected.id && item.bookId === selected.bookId);
+  const dialogues = savedDialogues.filter(item => item.chapterId === selected.id && item.bookId === selected.bookId && item.verifiedQuote !== false);
   const savedJob = savedJobs.filter(item => item.chapterId === selected.id && item.bookId === selected.bookId).sort((a, b) => b.updatedAt - a.updatedAt)[0];
   const [model, setModel] = useState<AIModel>('deepseek-flash');
   const [budget, setBudget] = useState('0.10');

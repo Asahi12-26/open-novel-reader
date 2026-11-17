@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmdirSync, unlinkSync, writeFileS
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import corpus from '../../evaluation/ai-corpus.json';
-import { extractDialogues } from './ai';
+import { extractDialogues, extractStoryDialogues } from './ai';
 
 interface Label { paragraph: number; quote: string; speaker: string | null; entity: string | null; manual?: boolean }
 interface Sample { id: string; language: string; scene: string; chapters: { paragraphs: string[]; gold: Label[]; knownNonDialogueQuotes?: string[] }[] }
@@ -68,5 +68,43 @@ describe('bilingual quality corpus and reporting (no provider)', () => {
     expect(result.recordedPredictionsEvaluated).toBe(false); expect(result.networkRequests).toBe(0);
     expect(result.speakerAttribution).toBeUndefined();
     expect(readFileSync(resolve('evaluation/ai-corpus.json'), 'utf8')).toContain('public domain');
+  });
+
+  it('compares V0.5 and V0.6 exact dialogue spans on the same bilingual fixtures', () => {
+    const newCases: Sample[] = [
+      { id: 'en-alternate-quotes', language: 'en', scene: 'alternate quotation marks', chapters: [{
+        paragraphs: ['Ada said, «Come inside.»', '— I will wait here.', '«He quoted “Tomorrow,” then sighed,» Ada added.'],
+        gold: [{ paragraph: 0, quote: '«Come inside.»', speaker: 'Ada', entity: 'ada' }, { paragraph: 1, quote: '— I will wait here.', speaker: null, entity: null },
+          { paragraph: 2, quote: '«He quoted “Tomorrow,” then sighed,»', speaker: 'Ada', entity: 'ada' }],
+      }] },
+      { id: 'zh-full-width-quote', language: 'zh', scene: 'alternate quotation marks', chapters: [{
+        paragraphs: ['阿兰说：＂到了港口再见。＂', '石碑上的「北渡」字样已经模糊。'],
+        gold: [{ paragraph: 0, quote: '＂到了港口再见。＂', speaker: '阿兰', entity: 'lan' }],
+      }] },
+    ];
+    const compare = (extractor: typeof extractDialogues) => {
+      const result = { labelled: 0, exact: 0, extra: 0, byScene: {} as Record<string, { labelled: number; exact: number; extra: number }> };
+      for (const sample of [...samples, ...newCases]) for (const [index, source] of sample.chapters.entries()) {
+        const chapter = { id: `${sample.id}:${index}`, bookId: sample.id, index, title: sample.id, paragraphs: source.paragraphs };
+        const original = source.gold.map(row => `${row.paragraph}:${source.paragraphs[row.paragraph].indexOf(row.quote)}:${row.quote}`);
+        const scene = result.byScene[sample.scene] ??= { labelled: 0, exact: 0, extra: 0 };
+        scene.labelled += original.length;
+        result.labelled += original.length;
+        for (const candidate of extractor(chapter)) {
+          expect(chapter.paragraphs[candidate.paragraphIndex].slice(candidate.start, candidate.end)).toBe(candidate.text);
+          const key = original.includes(`${candidate.paragraphIndex}:${candidate.start}:${candidate.text}`) ? 'exact' : 'extra';
+          result[key]++;
+          scene[key]++;
+        }
+      }
+      return result;
+    };
+    const baseline = compare(extractDialogues);
+    const story = compare(extractStoryDialogues);
+    expect(baseline.exact).toBe(24);
+    expect(story.exact).toBe(story.labelled);
+    expect(story.extra).toBe(0);
+    mkdirSync(resolve('artifacts/qa'), { recursive: true });
+    writeFileSync(resolve('artifacts/qa/v06-dialogue-comparison.json'), JSON.stringify({ paidCalls: 0, baseline, story, providerAttribution: null }, null, 2));
   });
 });
