@@ -1,5 +1,13 @@
 # 构建、安装与更新
 
+## 0.5 Beta 1 发布产物
+
+`v0.5.0-beta.1` 指向 `21ea35187f2c425b6c9fedf5ad6f9b899e27e79d`。四项公开附件已下载校验，Android APK 沿用原证书与应用标识，版本号 5001，最低 API 26，仅含 ARM64。Windows x64 安装包版本已核对，未配置发布者签名。 [发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.5.0-beta.1) · [SHA256 校验值](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.5.0-beta.1/SHA256SUMS.txt)
+
+标签构建和 Web 检查通过。APK 与许可包中的 7 项许可文件均与标签源码一致。 [原生构建](https://github.com/Asahi12-26/open-novel-reader/actions/runs/43826749115) · [Web 检查](https://github.com/Asahi12-26/open-novel-reader/actions/runs/43826749133)
+
+Windows 核验使用正式安装包中提取的程序和独立测试档案，保留 V0.4 的测试书、进度与书签，验证头像跨章及冷启动保留。Android 安装包已验签，真机安装待复核。
+
 ## 0.4 Beta 2 发布产物
 
 `v0.4.0-beta.2` 指向 `85875075ca69b16c4c6afae9f7d3d19c84be53d2`，Android versionCode 为 `4002`。APK 沿用固定发布证书、应用标识与 HTTPS WebView 来源。Windows x64 安装包未配置发布者签名。 [发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.4.0-beta.2) · [SHA256 校验值](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.4.0-beta.2/SHA256SUMS.txt) · [第三方许可](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.4.0-beta.2/THIRD_PARTY_LICENSES.zip)
@@ -158,7 +166,7 @@ DPAPI credential 文件只能由本机当前用户解密，复制它不能替代
 - `Windows and Android builds`：main 和 `v*` tag 自动生成原生 artifacts；tag 成功后附加到 GitHub prerelease。
 - `Publish Web PWA`：GitHub Pages 生产部署；需要仓库启用 Pages。
 
-当前版本为 `0.4.0-beta.2`，Android versionCode 为 `4002`。发版时同步更新 package.json、package-lock.json、src-tauri/Cargo.toml、Cargo.lock 和 tauri.conf.json，并递增 Android versionCode。原生 CI 通过 `node scripts/check-release-version.mjs` 检查版本、标签和应用标识。推送对应标签后，在 Actions 确认构建成功并检查发布附件。
+当前版本为 `0.5.0-beta.1`，Android versionCode 为 `5001`。发版时同步更新 package.json、package-lock.json、src-tauri/Cargo.toml、Cargo.lock 和 tauri.conf.json，并递增 Android versionCode。原生 CI 通过 `node scripts/check-release-version.mjs` 检查版本、标签和应用标识。推送对应标签后，在 Actions 确认构建成功并检查发布附件。
 
 tag 工作流将原生二进制复制成 `Open-Novel-Reader_<version>_windows-x64-setup.exe`、`Open-Novel-Reader_<version>_android-arm64.apk`，随同 `THIRD_PARTY_LICENSES.zip`、`SHA256SUMS.txt` 上传。先规范为无空格的 ASCII 下载名再生成校验值，上传后检查实际附件名称，避免 GitHub 重命名导致校验文件名不匹配。已存在的同 tag Release 只覆盖同名附件，不会因为 Release 已存在而失败。
 

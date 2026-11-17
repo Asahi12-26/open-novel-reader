@@ -1,10 +1,14 @@
 # PROJECT_STATUS
 
-## V0.5 人物可视化
+## V0.5 人物可视化（2026-11-17）
 
 - V0.5.0-beta.1 加入人物网格、卡片和正文头像。头像绑定稳定人物 ID，复用已读范围投影和人工纠错。现有书库增量升级至 IndexedDB 版本 2。 [头像与卡片指南](docs/CHARACTER_AVATARS.md)
 - 本机头像随备份保存。授权云同步的书籍使用账号私有图片桶，书籍记录只携带头像修订信息。Windows 与 Android 使用原应用标识，Android versionCode 为 5001。 [云同步说明](docs/SYNC_AI.md)
 - 下一阶段待办为 AI 说话人归属质量评估与优化，重点覆盖同名不同人、代称歧义和跨章身份。V0.5 继续使用 V0.4 的识别策略。
+- 候选提交 `21ea351` 通过 139 项本地测试及标签 Web 检查。四项公开附件已核对 SHA256，APK 固定证书和版本号均通过。桌面与手机浏览器验证了头像编辑、纠错、防剧透、离线重启与备份恢复。Android 真机覆盖安装待补。 [发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.5.0-beta.1) · [标签检查](https://github.com/Asahi12-26/open-novel-reader/actions/runs/43826749133)
+- 线上已部署头像迁移并检查桶权限。双设备传输、同书账号隔离、逐本授权和并发更新由同步集成测试覆盖。首次上线后仍待用两个真实客户端复核头像传输。
+- Windows 已用正式安装包中提取的程序，在独立 WebView2 测试档案完成 V0.4 → V0.5 数据升级。原书、阅读位置、对白归属和书签保留，使用系统选图器保存头像后，跨章节与关闭重开均可显示。测试未运行安装向导。
+- 在线版已部署相同的 `0.5.0-beta.1` 提交，公开页面与头像界面资源已回读确认。 [在线版](https://asahi12-26.github.io/open-novel-reader/) · [Pages 部署](https://github.com/Asahi12-26/open-novel-reader/actions/runs/43827831757)
 
 更新：2026-11-13 · V0.4 Beta 2 已发布
 

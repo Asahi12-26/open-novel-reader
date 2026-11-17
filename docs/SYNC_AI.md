@@ -1,6 +1,6 @@
 # 云同步与真实 AI 部署
 
-本地阅读无需账号。V0.4 Beta 2 已发布，线上 `deepseek-proxy` 已支持整书人物分析。自建用户可在原 Supabase 项目部署新版函数，沿用已有数据库与存储。分析使用读者自行载入的会话密钥。 [Beta 2 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.4.0-beta.2) · [整书分析指南](BOOK_ANALYSIS.md)
+本地阅读无需账号。V0.5 同步已授权书籍的头像，线上 `deepseek-proxy` 继续支持逐章和整书分析。分析使用读者自行载入的会话密钥。 [头像与人物管理](CHARACTER_AVATARS.md) · [整书分析指南](BOOK_ANALYSIS.md)
 
 ## Supabase
 
@@ -10,6 +10,8 @@
 4. 在两台设备登录同一个账号，在书籍详情明确勾选云同步，再执行同步。第一次会上传原文件、章节文本及这本书的元数据。没有选择的书不会被上传。
 
 `reader_records` 保存版本化书籍包，包含章节、阅读位置、书签、人物、对白、纠错和任务检查点。初始原文件位于私有 `novel-files/<用户ID>/<书ID>/original.<格式>`；明确删除后恢复采用 `.../restored-<restoredAt>/original.<格式>`，因此旧删除请求不能删除更新一代的恢复文件。客户端兼容旧版路径；数据库和 Storage 均实施 RLS。`reader_profiles` 只保存阅读偏好与分类。原文、AI 输出、人工纠错分别存于包中不同字段、本地不同表。表与备份都有 schema 版本，可在后续迁移。
+
+书籍包只保存头像的修订和 SHA256。图片储存在私有 `character-avatars/<用户ID>/<书ID>/<书籍版本>/<SHA256>.png`，每张最多 300 KiB。客户端校验下载图片后才更新本机数据。更换、重置头像或移除书籍后，旧图片对象仍保留在私有桶中。 [Storage 访问控制](https://supabase.com/docs/guides/storage/security/access-control)
 
 同步以本地为主：未联网修改保留在 IndexedDB；手动同步、联网/聚焦后的延迟重试及每分钟在线检查时上传。每个云端书籍包有服务端 revision，写入通过 compare-and-swap RPC 拒绝过期版本；三方合并结合上次快照，保留不同设备新增记录，已有记录的删除优先。书籍 tombstone 保留并清除云端正文、对白与书签，防止旧设备误恢复删除项。阅读位置和同项纠错采用修改时间选择，依赖设备时钟一致。失败不会清空本地库。
 

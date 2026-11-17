@@ -3,10 +3,10 @@
 ## 选择平台
 
 - **Web / PWA：** 打开 [公开阅读器](https://asahi12-26.github.io/open-novel-reader/)，无需注册即可导入小说。首次联网打开并完成应用缓存后可离线再开；浏览器支持时可用菜单中的安装应用功能。
-- **Windows x64** 下载并运行安装向导。安装包未配置发布者签名。 [下载 Beta 2 EXE](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.4.0-beta.2/Open-Novel-Reader_0.4.0-beta.2_windows-x64-setup.exe)
-- **Android ARM64** 最低 Android 8，Beta 2 的 versionCode 为 4002。0.2 起的正式签名版可覆盖升级。仍在使用 0.1 开发签名版时，先导出并保留书库备份，再卸载、安装新版并恢复。 [下载 Beta 2 APK](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.4.0-beta.2/Open-Novel-Reader_0.4.0-beta.2_android-arm64.apk)
+- **Windows x64** 下载并运行安装向导。安装包未配置发布者签名。 [下载 V0.5 Beta 1 EXE](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.5.0-beta.1/Open-Novel-Reader_0.5.0-beta.1_windows-x64-setup.exe)
+- **Android ARM64** 最低 Android 8，V0.5 Beta 1 的 versionCode 为 5001。0.2 起的正式签名版可覆盖升级。仍在使用 0.1 开发签名版时，先导出并保留书库备份，再卸载、安装新版并恢复。 [下载 V0.5 Beta 1 APK](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.5.0-beta.1/Open-Novel-Reader_0.5.0-beta.1_android-arm64.apk)
 
-Web、Windows 与 Android 的本机书库分别保存。登录同一账号并逐本允许上传后，可通过云端同步。 [Beta 2 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.4.0-beta.2) · [下载校验值](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.4.0-beta.2/SHA256SUMS.txt) · [历史升级验证](../PROJECT_STATUS.md)
+Web、Windows 与 Android 的本机书库分别保存。登录同一账号并逐本允许上传后，可通过云端同步。 [V0.5 Beta 1 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.5.0-beta.1) · [下载校验值](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.5.0-beta.1/SHA256SUMS.txt) · [历史升级验证](../PROJECT_STATUS.md)
 
 ## 导入与阅读
 
@@ -14,6 +14,7 @@ Web、Windows 与 Android 的本机书库分别保存。登录同一账号并逐
 2. 点击封面进入阅读器。使用目录或「上一章 / 下一章」切换章节；阅读位置自动保存，再次打开从保存位置继续。
 3. 在「阅读排版设置」中调整字体、字号、行距、页宽与纸白 / 暖笺 / 夜读主题。位置使用段落及字符锚点，调整排版后可继续阅读。
 4. 点击「添加当前段落书签」收藏当前位置，通过「查看全部书签」跳转或移除书签。
+5. 点击已识别对白的头像查看人物卡片，点击人物标签更正归属。头像可在「阅读排版设置」关闭。 [头像与人物管理](CHARACTER_AVATARS.md)
 
 TXT 支持 UTF-8、GB18030 和带 BOM 的 UTF-16。EPUB 目前按文字阅读，支持目录、段落与封面；暂不呈现内嵌插图、强调 / 链接样式和出版商 CSS，不支持 DRM、漫画及固定版式 EPUB。
 
