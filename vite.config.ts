@@ -1,8 +1,16 @@
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 import { readFileSync } from 'node:fs';
-export default defineConfig({
+import { readPublicCloudConfig } from './src/core/public-cloud-config';
+
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd());
+  if (env.VITE_SUPABASE_URL || env.VITE_SUPABASE_ANON_KEY) {
+    try { readPublicCloudConfig(env.VITE_SUPABASE_URL || '', env.VITE_SUPABASE_ANON_KEY || ''); }
+    catch { throw new Error('Invalid public Supabase build configuration. Supply the project HTTPS origin and a publishable or anon key together.'); }
+  }
+  return {
   base: './',
   plugins: [react(), { name: 'distribution-notices', generateBundle() {
     for (const [source, fileName] of [['LICENSE','legal/AGPL-3.0.txt'], ['THIRD_PARTY_NOTICES.md','legal/THIRD_PARTY_NOTICES.md'], ['docs/licenses/DEPENDENCY_NOTICES.txt','legal/DEPENDENCY_NOTICES.txt']] as const) {
@@ -15,4 +23,5 @@ export default defineConfig({
   }, workbox: { globPatterns: ['**/*.{js,css,html,svg,png,woff2,txt,md}'], maximumFileSizeToCacheInBytes: 4000000, navigateFallbackDenylist: [/^\/auth/, /^\/api/], cleanupOutdatedCaches: true } })],
   server: { port: 1420, strictPort: true },
   build: { target: 'es2022', rollupOptions: { output: { manualChunks: { react: ['react','react-dom'], motion: ['motion/react'], storage: ['dexie','jszip'], cloud: ['@supabase/supabase-js'] } } } },
+  };
 });

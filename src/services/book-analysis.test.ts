@@ -7,18 +7,14 @@ import { clearAIKey, correctDialogue, extractStoryDialogues, setAIKey } from './
 import { analyzeBook, estimateBookAnalysis, getBookAnalysisJob, listBookAnalysisJobs } from './book-analysis';
 import type { BookAnalysisController, BookAnalysisJob, BookAnalysisOptions } from './book-analysis-types';
 import { storyAttributions, storySpeechInput } from './book-story';
+import { AI_BOOK_SYSTEM_PROMPT, AI_COST_MARGIN, AI_MODELS, AI_TOKEN_OVERHEAD } from '../../supabase/functions/_shared/ai-contract';
+import { STORY_IDENTITY_SYSTEM_PROMPT, STORY_PLOT_SYSTEM_PROMPT } from '../../supabase/functions/_shared/story-contract';
 
 const cloud = vi.hoisted(() => ({
   config: { url: 'https://book-runner.example.invalid', anonKey: 'sb_publishable_offline_fixture' },
-  listeners: new Set<(session: { user: { id: string } } | null) => void>(),
 }));
 vi.mock('./cloud', () => ({
   getCloudConfig: () => cloud.config,
-  getSession: async () => ({ user: { id: 'book-fixture-user' }, access_token: 'offline-fixture-session' }),
-  subscribeAuth: (callback: (session: { user: { id: string } } | null) => void) => {
-    cloud.listeners.add(callback);
-    return () => cloud.listeners.delete(callback);
-  },
 }));
 
 const key = 'offline-book-fixture-not-a-credential';
@@ -33,8 +29,24 @@ const chapters: Chapter[] = [
   { id: 'book-fixture-ch2', bookId: book.id, index: 1, title: '第二章', paragraphs: ['林青说：“我们到了。”'] },
 ];
 interface AnalysisRequest {
-  action: 'analyze'; protocol: 'identity-v1'; authorized: boolean; apiKey: string; maxCostUsd: number;
+  protocol: 'identity-v1' | 'plot-v1' | 'story-identity-v1'; maxCostUsd: number;
   input: { chapter: string; context: { paragraph: number; start: number; text: string }[]; known: { id: string; name: string }[]; dialogues: { id: string; text: string }[] };
+}
+const accountStorageKey = 'onr.auth.book-runner.example.invalid';
+function providerRequest<Input>(url: string | URL | Request, init?: RequestInit) {
+  expect(url).toBe('https://api.deepseek.com/chat/completions');
+  expect(init).toMatchObject({ method: 'POST', redirect: 'error', credentials: 'omit', headers: { Authorization: `Bearer ${key}` } });
+  const body = JSON.parse(String(init?.body));
+  expect(init?.body).not.toContain(key);
+  expect(body).toMatchObject({ model: 'deepseek-flash', max_tokens: 4096, stream: false });
+  const system = body.messages[0].content;
+  const protocol: AnalysisRequest['protocol'] = system === STORY_PLOT_SYSTEM_PROMPT ? 'plot-v1'
+    : system === STORY_IDENTITY_SYSTEM_PROMPT ? 'story-identity-v1' : 'identity-v1';
+  if (protocol === 'identity-v1') expect(system).toBe(AI_BOOK_SYSTEM_PROMPT);
+  const messages = system + body.messages[1].content;
+  const model = AI_MODELS[0];
+  const maxCostUsd = AI_COST_MARGIN * ((new TextEncoder().encode(messages).length + AI_TOKEN_OVERHEAD) * model.inputPerMillion + body.max_tokens * model.outputPerMillion) / 1_000_000;
+  return { protocol, maxCostUsd, input: JSON.parse(body.messages[1].content) as Input };
 }
 
 const controllers: BookAnalysisController[] = [];
@@ -52,17 +64,9 @@ async function readTo(chapter: Chapter, offset: number, version: number) {
 }
 function mockProxy(failAt?: number) {
   const calls: AnalysisRequest[] = [];
-  let preflights = 0;
   vi.mocked(fetch).mockImplementation(async (url, init) => {
-    expect(url).toBe(`${cloud.config.url}/functions/v1/deepseek-proxy`);
-    const request = JSON.parse(String(init?.body));
-    if (request.action === 'status') {
-      expect(request).toEqual({ action: 'status' });
-      preflights++;
-      return Response.json({ ready: true, upstreamChecked: false, protocols: ['identity-v1'], models: ['deepseek-flash'], limits: { maxTokens: 4096, maxRequestCostUsd: 0.1 } });
-    }
-    expect(request).toMatchObject({ action: 'analyze', protocol: 'identity-v1', authorized: true, apiKey: key });
-    const body = request as AnalysisRequest;
+    const body = providerRequest<AnalysisRequest['input']>(url, init);
+    expect(body.protocol).toBe('identity-v1');
     calls.push(body);
     if (calls.length === failAt) return Response.json({ error: `Untrusted response must not leak ${key}` }, { status: 503 });
     const known = body.input.known.find(person => person.name === '林青');
@@ -70,7 +74,7 @@ function mockProxy(failAt?: number) {
       dialogues: body.input.dialogues.map(dialogue => ({ id: dialogue.id, speaker: '林青', characterId: known?.id || null, confidence: 0.96 })), identities: [],
     }) } }] });
   });
-  return { calls, get preflights() { return preflights; } };
+  return { calls };
 }
 function assertReservation(job: BookAnalysisJob, calls: AnalysisRequest[]) {
   const sum = calls.reduce((total, call) => total + call.maxCostUsd, 0);
@@ -79,7 +83,7 @@ function assertReservation(job: BookAnalysisJob, calls: AnalysisRequest[]) {
 }
 
 beforeEach(() => {
-  cloud.listeners.clear();
+  localStorage.setItem(accountStorageKey, JSON.stringify({ user: { id: 'book-fixture-user' } }));
   vi.stubGlobal('crypto', webcrypto);
   vi.stubGlobal('fetch', vi.fn(() => { throw new Error('Unmocked network access is prohibited.'); }));
   setAIKey(key);
@@ -89,6 +93,7 @@ afterEach(async () => {
   const tasks = controllers.splice(0);
   for (const task of tasks) task.cancel();
   await Promise.allSettled(tasks.map(task => task.done));
+  localStorage.removeItem(accountStorageKey);
   // Clearing only the test process's fake IndexedDB singleton.
   await db.transaction('rw', [db.books, db.chapters, db.progress, db.characters, db.dialogues, db.corrections, db.jobs, db.settings, db.plotEvents, db.chapterSummaries, db.dialogueCorrectionRevisions], async () => {
     await Promise.all([db.books.clear(), db.chapters.clear(), db.progress.clear(), db.characters.clear(), db.dialogues.clear(), db.corrections.clear(), db.jobs.clear(), db.settings.clear(), db.plotEvents.clear(), db.chapterSummaries.clear(), db.dialogueCorrectionRevisions.clear()]);
@@ -101,17 +106,15 @@ describe('whole-book analysis authorization and checkpointing (offline)', () => 
   it('releases the account binding when a book disappeared before preparation', async () => {
     await expect(start().done).rejects.toThrow('书籍不存在');
     expect(fetch).not.toHaveBeenCalled();
-    expect(cloud.listeners.size).toBe(0);
+    expect(await listBookAnalysisJobs(book.id)).toEqual([]);
   });
 
-  it('checks old proxy readiness before reserving any generation cost', async () => {
+  it('requires a user key before reserving any generation cost', async () => {
     await seed();
-    vi.mocked(fetch).mockResolvedValue(Response.json({ ready: true, upstreamChecked: false, models: ['deepseek-flash'], limits: { maxTokens: 4096, maxRequestCostUsd: 0.1 } }));
-    const stopped = await start().done;
-    expect(stopped).toMatchObject({ status: 'failed', completedChunks: 0, reservedUsd: 0 });
-    expect(stopped.error).toContain('尚未支持');
-    expect(fetch).toHaveBeenCalledOnce();
-    expect(JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body))).toEqual({ action: 'status' });
+    clearAIKey();
+    await expect(start().done).rejects.toThrow('API Key');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(await db.settings.where('id').startsWith('book-analysis-budget:').count()).toBe(0);
     expect(await db.dialogues.count()).toBe(0);
   });
 
@@ -139,7 +142,6 @@ describe('whole-book analysis authorization and checkpointing (offline)', () => 
     setAIKey(key);
     await expect(start({ jobId: failed.id, authorized: false as true }).done).rejects.toThrow('授权');
     await expect(start({ jobId: failed.id, budgetUsd: options.budgetUsd * 2 }).done).rejects.toThrow('预算');
-    expect(proxy.preflights).toBe(1);
     expect(proxy.calls).toHaveLength(2);
 
     const completed = await start({ jobId: failed.id }).done;
@@ -152,7 +154,6 @@ describe('whole-book analysis authorization and checkpointing (offline)', () => 
     expect(saved).toHaveLength(2);
     expect(new Set(saved.map(dialogue => dialogue.characterId)).size).toBe(1);
     expect(saved[0].characterId).toBeTruthy();
-    expect(cloud.listeners.size).toBe(0);
   });
 
   it('stops a retry before the next charge when failed requests used the fixed budget', async () => {
@@ -232,11 +233,9 @@ describe('whole-book analysis authorization and checkpointing (offline)', () => 
       await waitingAt(second.id, second.paragraphs[0].length);
       expect(proxy.calls).toHaveLength(3);
       expect(proxy.calls[2].input.dialogues.map(row => row.text)).toEqual(['“我们到了。”']);
-      expect(proxy.preflights).toBe(1);
       assertReservation(latest!, proxy.calls);
     } finally { task.cancel(); }
     expect((await task.done).status).toBe('cancelled');
-    expect(cloud.listeners.size).toBe(0);
   });
 });
 
@@ -249,12 +248,7 @@ describe('story-first book analysis pipeline (offline)', () => {
       protocol: string; maxCostUsd: number;
     }[] = [];
     vi.mocked(fetch).mockImplementation(async (url, init) => {
-      expect(url).toBe(`${cloud.config.url}/functions/v1/deepseek-proxy`);
-      const request = JSON.parse(String(init?.body));
-      if (request.action === 'status') return Response.json({
-        ready: true, protocols: ['identity-v1', 'plot-v1', 'story-identity-v1'],
-      });
-      expect(request).toMatchObject({ action: 'analyze', authorized: true, apiKey: key });
+      const request = providerRequest<typeof calls[number]['input']>(url, init);
       calls.push(request);
       if (calls.length === failAt) return Response.json({ error: 'offline interruption' }, { status: 503 });
       const input = request.input as typeof calls[number]['input'];
@@ -273,6 +267,7 @@ describe('story-first book analysis pipeline (offline)', () => {
   }
 
   it('records bounded plot before attributing speakers and skips completed plot and speech on resume', async () => {
+    localStorage.removeItem(accountStorageKey);
     await seed();
     const calls = mockStory(3);
     const estimate = await estimateBookAnalysis(book.id, options.model, 'deep');

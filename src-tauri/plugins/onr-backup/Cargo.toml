@@ -1,0 +1,15 @@
+[package]
+name = "tauri-plugin-onr-backup"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+license = "AGPL-3.0-only"
+publish = false
+links = "tauri-plugin-onr-backup"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2", default-features = false }
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }

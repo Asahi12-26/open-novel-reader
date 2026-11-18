@@ -18,40 +18,77 @@ export function authRedirectUrl(intent: AuthIntent, options: { native?: boolean;
 }
 
 export interface AuthCallbackInfo { intent: AuthIntent; errorCode?: string }
+export type EmailCallbackProof =
+  | { kind: 'session'; accessToken: string; refreshToken: string }
+  | { kind: 'otp'; tokenHash: string; type: 'signup' | 'recovery' }
+  | { kind: 'pkce'; code: string; flowId?: string };
+
+const fragmentIntents = { signup: 'confirmation', recovery: 'recovery' } as const;
+function fragmentIntent(hash: URLSearchParams): AuthIntent | undefined {
+  const type = hash.get('type');
+  return type === 'signup' || type === 'recovery' ? fragmentIntents[type] : undefined;
+}
+
 /** Return intent only; tokens are never copied into React state, notices, or logs. */
 export function readAuthCallback(href: string): AuthCallbackInfo | null {
   const url = new URL(href);
   const hash = new URLSearchParams(url.hash.slice(1));
   const auth = url.searchParams.get('auth');
-  const type = hash.get('type');
-  const hasCallback = auth === 'recovery' || auth === 'confirmation' || type === 'recovery' || type === 'signup' || hash.has('access_token') || url.searchParams.has('code') || hash.has('error') || hash.has('error_code') || url.searchParams.has('error') || url.searchParams.has('error_code');
+  const expected = auth === 'recovery' || auth === 'confirmation' ? auth : undefined;
+  const provider = fragmentIntent(hash);
+  const hasCallback = expected || provider || hash.has('access_token') || hash.has('token_hash') || url.searchParams.has('code') || hash.has('error') || hash.has('error_code') || url.searchParams.has('error') || url.searchParams.has('error_code');
   if (!hasCallback) return null;
-  const errorCode = hash.get('error_code') || url.searchParams.get('error_code') || (hash.has('error') || url.searchParams.has('error') ? 'callback_error' : undefined);
-  return { intent: auth === 'recovery' || type === 'recovery' ? 'recovery' : 'confirmation', ...(errorCode ? { errorCode } : {}) };
+  const mismatch = provider && expected && provider !== expected;
+  const errorCode = mismatch ? 'callback_mismatch' : hash.get('error_code') || url.searchParams.get('error_code') || (hash.has('error') || url.searchParams.has('error') ? 'callback_error' : undefined);
+  return { intent: expected || provider || 'confirmation', ...(errorCode ? { errorCode } : {}) };
+}
+
+export function readEmailCallbackProof(href: string, intent: AuthIntent): EmailCallbackProof | null {
+  const url = new URL(href);
+  const hash = new URLSearchParams(url.hash.slice(1));
+  const code = url.searchParams.get('code');
+  if (code && !hash.has('access_token') && !hash.has('refresh_token') && !hash.has('token_hash')) {
+    return { kind: 'pkce', code, flowId: url.searchParams.get('sb_flow_id') ?? undefined };
+  }
+  if (code || fragmentIntent(hash) !== intent) return null;
+  const accessToken = hash.get('access_token');
+  const refreshToken = hash.get('refresh_token');
+  const tokenHash = hash.get('token_hash');
+  if (tokenHash && !accessToken && !refreshToken) return { kind: 'otp', tokenHash, type: intent === 'recovery' ? 'recovery' : 'signup' };
+  return accessToken && refreshToken && !tokenHash ? { kind: 'session', accessToken, refreshToken } : null;
 }
 
 export function cleanAuthCallbackUrl(href: string): string {
   const url = new URL(href);
-  for (const name of ['auth', 'code', 'error', 'error_code', 'error_description']) url.searchParams.delete(name);
+  for (const name of ['auth', 'code', 'sb_flow_id', 'token_hash', 'access_token', 'refresh_token', 'error', 'error_code', 'error_description']) url.searchParams.delete(name);
   const hash = new URLSearchParams(url.hash.slice(1));
-  if (['access_token', 'refresh_token', 'error', 'error_code'].some(name => hash.has(name)) || ['recovery', 'signup'].includes(hash.get('type') || '')) url.hash = '';
+  if (['access_token', 'refresh_token', 'token_hash', 'error', 'error_code'].some(name => hash.has(name)) || fragmentIntent(hash)) url.hash = '';
   return url.href;
 }
 
-/** Do not echo arbitrary server responses; they can contain URLs or private details. */
-export function authErrorMessage(error: unknown): string {
+function authErrorTag(error: unknown): string {
   const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : '';
   const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
-  const value = `${code} ${message}`.toLowerCase();
+  return `${code} ${message}`.toLowerCase();
+}
+
+export const isMissingEmailAccount = (error: unknown) => /user_not_found|email_not_found|user not found/.test(authErrorTag(error));
+
+/** Do not echo arbitrary server responses; they can contain URLs or private details. */
+export function authErrorMessage(error: unknown): string {
+  const value = authErrorTag(error);
+  if (/owner.only|private.cloud.access.denied/.test(value)) return '此账号没有该私有云的访问权限。你仍可在本机阅读。';
+  if (/private.cloud.access.unavailable/.test(value)) return '暂时无法核验私有云权限。请检查网络和云项目配置，再请求新的邮件。';
+  if (/anonymous_users_disabled|user_banned/.test(value)) return '当前账号无法登录，请联系服务维护者。';
   if (/invalid_credentials|invalid login credentials/.test(value)) return '邮箱或密码不正确，请检查后重试。';
-  if (/email_not_confirmed|email not confirmed/.test(value)) return '请先打开确认邮件中的链接，再回来登录。';
+  if (/email_not_confirmed|email not confirmed/.test(value)) return '该账号的邮箱尚未验证。请在 Supabase Auth 中核对验证状态后再登录。';
   if (/user_already_exists|already registered/.test(value)) return '此邮箱已注册，请登录或找回密码。';
   if (/over_email_send_rate_limit|over_request_rate_limit|rate.limit|too many|security purposes/.test(value)) return '操作过于频繁，请稍后再试；邮件服务也可能已达到发送额度。';
   if (/email_address_not_authorized|email address not authorized|not allowed to send/.test(value)) return '当前邮件服务尚未开放此邮箱。请联系服务维护者完成邮件配置。';
   if (/email_send_failed|error sending.*email|error sending.*(confirmation|recovery)|smtp/.test(value)) return '邮件暂时发送失败，请稍后重试；若持续失败，请联系服务维护者检查邮件服务。';
-  if (/signup_disabled|signups not allowed|email_provider_disabled/.test(value)) return '当前服务未开放邮箱注册，请联系服务维护者。';
+  if (/email_provider_disabled/.test(value)) return '该云项目的邮箱登录尚未配置。';
   if (/weak_password|password.*(short|least|weak)|same_password|different from/.test(value)) return '请换一个更强的新密码，至少 8 位，并满足服务的密码要求。';
-  if (/otp_expired|flow_state_expired|flow_state_not_found|expired|invalid.*(token|otp)|bad_code_verifier|pkce/.test(value)) return '邮件链接已失效或已使用，请重新发送邮件，并打开最新一封。';
+  if (/callback_mismatch|otp_expired|flow_state_expired|flow_state_not_found|expired|invalid.*(token|otp)|bad_code_verifier|pkce/.test(value)) return '邮件链接已失效或已使用，请重新发送邮件，并打开最新一封。';
   if (/session_not_found|refresh_token_not_found|refresh_token_already_used|auth session missing|not authenticated|请先登录/.test(value)) return '登录状态已失效，请重新登录或重新发送找回密码邮件。';
   if (/invalid.*email|email_address_invalid|email.*invalid/.test(value)) return '请填写有效的邮箱地址。';
   if (/fetch|network|offline|timeout|timed out|connection/.test(value)) return '暂时无法连接账号服务，请检查网络后重试。';

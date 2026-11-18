@@ -1,6 +1,33 @@
 import { test, expect } from '@playwright/test';
 import { importText } from './helpers';
 
+test('first-run guide starts a local book and opens AI setup without leaving the reader', async ({ page, context }) => {
+  await context.route('https://**', route => route.abort('blockedbyclient'));
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/');
+  const guide = page.getByRole('region', { name: '开始阅读', exact: true });
+  await expect(guide.getByRole('button', { name: '数据备份与恢复', exact: true })).toBeVisible();
+  await expect(guide.getByText(/不会自动随设备迁移/)).toBeVisible();
+  await expect(guide.getByRole('button', { name: /注册|登录/ })).toHaveCount(0);
+  await expect(guide.getByRole('button', { name: '导入小说并开始', exact: true })).toBeVisible();
+  await guide.getByRole('button', { name: '直接开始离线阅读', exact: true }).tap();
+  const reader = page.getByRole('dialog', { name: '阅读 窗边的书店', exact: true });
+  await reader.getByRole('button', { name: '下一章', exact: true }).tap();
+  const title = reader.getByRole('heading', { name: '第一章 雨停之前', exact: true });
+  await expect(title).toBeVisible();
+  await reader.getByRole('button', { name: '章节人物识别', exact: true }).tap();
+  await page.getByRole('button', { name: '打开 AI 配置', exact: true }).tap();
+  const settings = page.getByRole('dialog', { name: '你的阅读空间', exact: true });
+  await expect(settings.getByRole('heading', { name: '配置自己的 API Key', exact: true })).toBeVisible();
+  await expect(settings.getByRole('button', { name: '载入密钥', exact: true })).toBeEnabled();
+  await settings.getByRole('button', { name: '关闭', exact: true }).tap();
+  await expect(title).toBeVisible();
+  await page.reload();
+  await expect(title).toBeVisible();
+  await reader.getByRole('button', { name: '返回书架', exact: true }).tap();
+  await expect(guide).toHaveCount(0);
+});
+
 test('mobile touch layout imports and reads without horizontal overflow', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/');

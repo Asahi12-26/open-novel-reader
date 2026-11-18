@@ -1,67 +1,59 @@
 import { test, expect, type Page, type BrowserContext } from '@playwright/test';
+import { STORY_IDENTITY_SYSTEM_PROMPT, STORY_PLOT_SYSTEM_PROMPT } from '../supabase/functions/_shared/story-contract';
 
-const project = 'https://offline-book.supabase.co';
-const publicKey = 'sb_publishable_offline_book_fixture';
-const userId = '00000000-0000-4000-8000-000000000004';
 const sessionKey = 'fixture-book-key-not-a-provider-credential';
 const bookName = 'V04整书离线验证';
 
-interface MockRequest { input: { chapter: string; known: { id: string; name: string }[]; dialogues: { id: string; text: string }[] }; authorized: boolean; maxCostUsd: number }
+interface MockRequest { input: { chapter: string; known: { id: string; name: string }[]; dialogues: { id: string; text: string }[] } }
 
-async function mockAccount(page: Page, context: BrowserContext) {
+async function mockProvider(context: BrowserContext) {
   const requests: MockRequest[] = [];
   const plotRequests: { chapter: string; context: { paragraph: number; start: number; text: string }[] }[] = [];
-  await context.route('https://api.deepseek.com/**', route => route.abort('blockedbyclient'));
-  await context.route(`${project}/**`, async route => {
-    const url = new URL(route.request().url());
-    if (url.pathname === '/functions/v1/deepseek-proxy') {
-      const body = route.request().postDataJSON();
-      if (body.action === 'status') return route.fulfill({ json: { ready: true, protocols: ['identity-v1', 'plot-v1', 'story-identity-v1'], upstreamChecked: false, models: ['deepseek-flash', 'deepseek-v4-pro'], limits: { maxTokens: 4096, maxRequestCostUsd: 0.1 } } });
-      expect(body.action).toBe('analyze');
-      expect(body.authorized).toBe(true);
-      expect(body.maxCostUsd).toBeLessThanOrEqual(.1);
-      const { input } = body;
-      const answer = (value: unknown) => route.fulfill({ json: { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(value) } }] } });
-      const quote = (row: { paragraph: number; start: number; text: string }) => {
-        const text = row.text.slice(0, 120);
-        return { paragraphIndex: row.paragraph, start: row.start, end: row.start + text.length, text };
-      };
-      if (body.protocol === 'plot-v1') {
-        plotRequests.push(input);
-        const evidence = quote(input.context[0]);
-        return answer({ summary: input.chapter.includes('远行') ? '远行简介 · 指南针' : '渡口记忆 · 地图计划',
-          events: [{ kind: 'claim', confidence: .98, description: '记录人物明确说出的计划', characters: [], evidence }] });
-      }
-      expect(plotRequests.some(row => row.chapter === input.chapter)).toBe(true);
-      requests.push(body);
-      if (requests.length === 3) return route.fulfill({ status: 503, json: { error: 'OFFLINE_BOOK_FIXTURE_FAILURE' } });
-      const speaker = String(body.input.chapter).includes('远行') ? 'Mara' : '林青';
-      const knownId = body.input.known.find((person: { name: string }) => person.name === speaker)?.id || null;
-      const identityText = '林青又名青鸟。';
-      const identities = String(body.input.chapter).includes('约定') && knownId ? [{ characterId: knownId, kind: 'alias', value: '青鸟', evidence: { paragraphIndex: 0, start: 0, end: identityText.length, text: identityText }, confidence: .97 }] : [];
-      return answer({ dialogues: input.dialogues.map((item: { id: string; paragraphIndex: number }) => ({
-        id: item.id, speaker, characterId: knownId, confidence: .97, speech: true,
-        evidence: quote(input.context.find((line: { paragraph: number }) => line.paragraph === item.paragraphIndex)),
-      })), identities });
+  await context.route('https://**', route => route.abort('blockedbyclient'));
+  await context.route('https://api.deepseek.com/chat/completions', async route => {
+    const request = route.request();
+    const cors = { 'Access-Control-Allow-Origin': 'http://127.0.0.1:4173', 'Access-Control-Allow-Headers': 'authorization, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS' };
+    if (request.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+    expect(request.method()).toBe('POST');
+    expect(await request.headerValue('authorization')).toBe(`Bearer ${sessionKey}`);
+    const body = request.postDataJSON();
+    expect(body.max_tokens).toBeLessThanOrEqual(4096);
+    expect(body.apiKey).toBeUndefined();
+    const [system, user] = body.messages;
+    expect(system.role).toBe('system');
+    expect(user.role).toBe('user');
+    const input = JSON.parse(user.content);
+    const answer = (value: unknown) => route.fulfill({ headers: cors, json: { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(value) } }] } });
+    const quote = (row: { paragraph: number; start: number; text: string }) => {
+      const text = row.text.slice(0, 120);
+      return { paragraphIndex: row.paragraph, start: row.start, end: row.start + text.length, text };
+    };
+    if (system.content === STORY_PLOT_SYSTEM_PROMPT) {
+      plotRequests.push(input);
+      const evidence = quote(input.context[0]);
+      return answer({ summary: input.chapter.includes('远行') ? '远行简介 · 指南针' : '渡口记忆 · 地图计划',
+        events: [{ kind: 'claim', confidence: .98, description: '记录人物明确说出的计划', characters: [], evidence }] });
     }
-    if (url.pathname === '/auth/v1/user') return route.fulfill({ json: { id: userId, aud: 'authenticated', role: 'authenticated', email: 'offline-book@example.invalid', app_metadata: { provider: 'email', providers: ['email'] }, user_metadata: {}, created_at: new Date().toISOString() } });
-    if (url.pathname.startsWith('/rest/v1/')) return route.fulfill({ json: [] });
-    return route.fulfill({ status: 400, json: { error: 'OFFLINE_FIXTURE_ONLY' } });
+    expect(system.content).toBe(STORY_IDENTITY_SYSTEM_PROMPT);
+    expect(plotRequests.some(row => row.chapter === input.chapter)).toBe(true);
+    requests.push({ input });
+    if (requests.length === 3) return route.fulfill({ status: 503, headers: cors, json: { error: 'OFFLINE_BOOK_FIXTURE_FAILURE' } });
+    const speaker = String(input.chapter).includes('远行') ? 'Mara' : '林青';
+    const knownId = input.known.find((person: { name: string }) => person.name === speaker)?.id || null;
+    const identityText = '林青又名青鸟。';
+    const identities = String(input.chapter).includes('约定') && knownId ? [{ characterId: knownId, kind: 'alias', value: '青鸟', evidence: { paragraphIndex: 0, start: 0, end: identityText.length, text: identityText }, confidence: .97 }] : [];
+    return answer({ dialogues: input.dialogues.map((item: { id: string; paragraphIndex: number }) => ({
+      id: item.id, speaker, characterId: knownId, confidence: .97, speech: true,
+      evidence: quote(input.context.find((line: { paragraph: number }) => line.paragraph === item.paragraphIndex)),
+    })), identities });
   });
-  await page.addInitScript(({ project, publicKey, userId }) => {
-    const encode = (value: object) => btoa(JSON.stringify(value)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-    const expires = Math.floor(Date.now() / 1000) + 3600;
-    const token = `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode({ sub: userId, exp: expires, role: 'authenticated', aud: 'authenticated' })}.offlinefixture`;
-    localStorage.setItem('onr.cloud.public-config', JSON.stringify({ url: project, anonKey: publicKey }));
-    localStorage.setItem('onr.auth.offline-book.supabase.co', JSON.stringify({ access_token: token, refresh_token: 'offline-book-refresh', token_type: 'bearer', expires_in: 3600, expires_at: expires, user: { id: userId, aud: 'authenticated', role: 'authenticated', email: 'offline-book@example.invalid', app_metadata: { provider: 'email', providers: ['email'] }, user_metadata: {}, created_at: new Date().toISOString() } }));
-  }, { project, publicKey, userId });
   return { requests, plotRequests };
 }
 
 async function loadKey(page: Page) {
-  await page.getByRole('button', { name: '设置与云同步', exact: true }).click();
+  await page.getByRole('button', { name: '应用设置', exact: true }).click();
   const settings = page.getByRole('dialog', { name: '你的阅读空间', exact: true });
-  await settings.getByRole('button', { name: 'AI 模型', exact: true }).click();
+  await settings.getByRole('button', { name: 'AI 配置', exact: true }).click();
   await settings.getByLabel('DeepSeek API Key', { exact: true }).fill(sessionKey);
   await settings.getByRole('button', { name: '载入密钥', exact: true }).click();
   await expect(settings.getByRole('button', { name: '清除密钥', exact: true })).toBeEnabled();
@@ -77,7 +69,7 @@ async function openBookPanel(page: Page) {
 
 test('whole-book consent advances chapters, restores checkpoints, protects manual edits and hides future characters', async ({ page, context }) => {
   test.setTimeout(100_000);
-  const { requests, plotRequests } = await mockAccount(page, context);
+  const { requests, plotRequests } = await mockProvider(context);
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/');
   const prose = Array.from({ length: 16 }, (_, i) => `第${i + 1}段。${'这是用于检查阅读位置的原创安静段落，没有人物对白。'.repeat(5)}`).join('\n\n');

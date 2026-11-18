@@ -146,14 +146,24 @@ test('portrait upload and manual dialogue changes persist across chapters, offli
   await context.setOffline(false);
   await reader.locator('.reader-back').click();
 
+  await page.evaluate(() => Object.defineProperty(window, 'showSaveFilePicker', { value: undefined, configurable: true }));
+  await page.getByRole('button', { name: '备份或恢复书库', exact: true }).click();
   const exported = page.waitForEvent('download');
-  await page.getByRole('button', { name: '导出备份', exact: true }).click();
-  const backup = await readFile((await (await exported).path())!);
+  await page.getByRole('button', { name: '导出完整 ZIP', exact: true }).click();
+  const download = await exported;
+  expect(download.suggestedFilename()).toMatch(/\.zip$/);
+  const backup = await readFile((await download.path())!);
   const restored = await browser.newPage({ reducedMotion: 'reduce' });
   try {
     await restored.goto('/');
-    await restored.getByLabel('恢复备份文件', { exact: true }).setInputFiles({ name: 'library-backup.json', mimeType: 'application/json', buffer: backup });
+    await restored.getByRole('button', { name: '备份或恢复书库', exact: true }).click();
+    await restored.getByLabel('恢复备份文件', { exact: true }).setInputFiles({ name: 'library-backup.zip', mimeType: 'application/zip', buffer: backup });
+    await restored.getByRole('radio', { name: '替换本机书库', exact: true }).check();
+    await expect(restored.getByRole('button', { name: '确认替换并恢复', exact: true })).toBeDisabled();
+    await restored.getByRole('radio', { name: '合并到本机书库', exact: true }).check();
+    await restored.getByRole('button', { name: '合并并恢复', exact: true }).click();
     await expect(restored.getByText('备份已恢复', { exact: true })).toBeVisible();
+    await restored.getByRole('dialog', { name: '你的阅读空间', exact: true }).getByRole('button', { name: '关闭', exact: true }).click();
     const restoredReader = restored.getByRole('dialog', { name: title, exact: true });
     if (!(await restoredReader.isVisible())) await restored.getByRole('button', { name: title, exact: true }).click();
     await expect(restoredReader.getByRole('heading', { name: secondChapter, exact: true })).toBeVisible();

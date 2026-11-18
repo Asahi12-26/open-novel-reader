@@ -11,6 +11,8 @@ select ok(
 insert into auth.users(id, email) values
   ('1bb0aebb-406e-428e-bb2c-01d899300001', 'avatar-a@example.invalid'),
   ('1bb0aebb-406e-428e-bb2c-01d899300002', 'avatar-b@example.invalid');
+insert into reader_private.cloud_members(user_id) values
+  ('1bb0aebb-406e-428e-bb2c-01d899300001'), ('1bb0aebb-406e-428e-bb2c-01d899300002');
 
 set local role authenticated;
 set local request.jwt.claims = '{"sub":"1bb0aebb-406e-428e-bb2c-01d899300001","role":"authenticated","is_anonymous":false}';

@@ -16,7 +16,7 @@ import ChapterSummary from './ChapterSummary';
 import { loadSeriesAvatars } from '../services/series';
 import type { SeriesAccess } from '../core/series-types';
 
-interface Props { book: Book; chapters: Chapter[]; progress?: ReadingProgress; fromOcean?: boolean; preferences: Preferences; seriesAccess: SeriesAccess; onPreferences: (patch: Partial<Preferences>) => void; onClose: () => void }
+interface Props { book: Book; chapters: Chapter[]; progress?: ReadingProgress; fromOcean?: boolean; preferences: Preferences; seriesAccess: SeriesAccess; onPreferences: (patch: Partial<Preferences>) => void; onConfigureAI: () => void; onClose: () => void }
 function characterRect(element: HTMLElement, offset: number): DOMRect {
   const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, { acceptNode: node => node.parentElement?.closest('[data-reading-decoration]') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
   let node: Node | null; let left = Math.max(0,offset);
@@ -31,7 +31,7 @@ function scrollToAnchor(root: HTMLElement, paragraph: HTMLElement, offset: numbe
   const rect = offset ? characterRect(paragraph,offset) : paragraph.getBoundingClientRect();
   root.scrollTop += rect.top-root.getBoundingClientRect().top-110;
 }
-export default function Reader({ book, chapters, progress, fromOcean = true, preferences, seriesAccess, onPreferences, onClose }: Props) {
+export default function Reader({ book, chapters, progress, fromOcean = true, preferences, seriesAccess, onPreferences, onConfigureAI, onClose }: Props) {
   const first = Math.max(0, chapters.findIndex(c => c.id === progress?.chapterId));
   const [index, setIndex] = useState(first);
   const [toc, setToc] = useState(false);
@@ -244,6 +244,13 @@ export default function Reader({ book, chapters, progress, fromOcean = true, pre
     setBookAnalysis(true);
     setBookAnalysisRevision(value => value + 1);
   };
+  function configureAI() {
+    setAnalysis(false);
+    setBookAnalysis(false);
+    setBookTaskActive(false);
+    setRegenerateChapterId(undefined);
+    onConfigureAI();
+  }
   const lastParagraph = Math.max(0, chapter.paragraphs.length - 1);
   const lastOffset = chapter.paragraphs[lastParagraph]?.length || 0;
   const recapChapter = chapters.find(item => item.id === summaryChapterId);
@@ -290,8 +297,8 @@ export default function Reader({ book, chapters, progress, fromOcean = true, pre
       <footer className="reader-footer"><button disabled={index === 0} onClick={() => goChapter(index-1)} aria-label="上一章"><ChevronLeft size={17}/><span>上一章</span></button><span className="reader-position">{chapter.title}<small>{index+1} / {chapters.length} 章 · {percentage}%</small></span><button disabled={index === chapters.length-1} onClick={() => goChapter(index+1)} aria-label="下一章"><span>下一章</span><ChevronRight size={17}/></button></footer><div className="reader-progress"><i style={{width:`${percentage}%`}}/></div>
     </div>
     {bookmarkList && <Modal title="故事里的停靠点" onClose={() => setBookmarkList(false)}>{marks.length ? <div className="bookmark-list">{marks.map(m => <div key={m.id}><button onClick={() => goChapter(chapters.findIndex(c => c.id === m.chapterId),m.paragraphIndex)}><small>{chapters.find(c => c.id === m.chapterId)?.title}</small>{m.label}</button><button className="icon-button" aria-label="删除书签" onClick={() => void run(() => db.bookmarks.delete(m.id))}><X size={17}/></button></div>)}</div> : <div className="modal-empty"><BookmarkIcon size={30}/><p>读到喜欢的段落，就为它留一个书签。</p></div>}</Modal>}
-    {analysis && <AnalysisPanel chapter={chapter} scope={identityScope} getCharacter={identities.character} showAll={showAllCharacters} blockedByBookTask={bookTaskActive} onOpenBookAnalysis={() => { setAnalysis(false); setRegenerateChapterId(undefined); setBookAnalysis(true); setBookAnalysisRevision(value => value + 1); }} onClose={() => setAnalysis(false)} onViewResults={target => { setAnalysis(false); void goChapter(chapters.findIndex(item => item.id === target.id)); }}/>}
-    {bookAnalysis && <BookAnalysisPanel key={regenerateChapterId ?? "whole-book"} summaryChapterId={regenerateChapterId} seriesAccess={seriesAccess} bookId={book.id} chapters={chapters} dialogues={allDialogues} scope={identityScope} getCharacter={identities.character} showAll={showAllCharacters} openRevision={bookAnalysisRevision} onActivity={setBookTaskActive} onClose={() => { setBookAnalysis(false); setBookTaskActive(false); setRegenerateChapterId(undefined); }} onViewResults={(target, paragraphIndex) => void goChapter(chapters.findIndex(item => item.id === target.id), paragraphIndex)}/>}
+    {analysis && <AnalysisPanel chapter={chapter} scope={identityScope} getCharacter={identities.character} showAll={showAllCharacters} blockedByBookTask={bookTaskActive} onConfigureAI={configureAI} onOpenBookAnalysis={() => { setAnalysis(false); setRegenerateChapterId(undefined); setBookAnalysis(true); setBookAnalysisRevision(value => value + 1); }} onClose={() => setAnalysis(false)} onViewResults={target => { setAnalysis(false); void goChapter(chapters.findIndex(item => item.id === target.id)); }}/>}
+    {bookAnalysis && <BookAnalysisPanel key={regenerateChapterId ?? "whole-book"} summaryChapterId={regenerateChapterId} seriesAccess={seriesAccess} bookId={book.id} chapters={chapters} dialogues={allDialogues} scope={identityScope} getCharacter={identities.character} showAll={showAllCharacters} openRevision={bookAnalysisRevision} onActivity={setBookTaskActive} onConfigureAI={configureAI} onClose={() => { setBookAnalysis(false); setBookTaskActive(false); setRegenerateChapterId(undefined); }} onViewResults={(target, paragraphIndex) => void goChapter(chapters.findIndex(item => item.id === target.id), paragraphIndex)}/>}
     {recapChapter && <ChapterSummary chapter={recapChapter} scope={identityScope} resolveCharacter={summaryIdentity.character} onCharacter={openPerson} onRegenerate={() => regenerateSummary(recapChapter.id)} onClose={() => setSummaryChapterId(null)}/>}
     {selectedDialogue && <Modal title="这一句，是谁说的？" onClose={() => setSelectedDialogue(null)}>
       <blockquote className="dialogue-quote">{selectedDialogue.text}</blockquote>

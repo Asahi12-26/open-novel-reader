@@ -3,13 +3,14 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const auth = vi.hoisted(() => ({
   getCloudConfig: vi.fn(), getSession: vi.fn(), subscribeAuth: vi.fn(() => () => {}),
-  signIn: vi.fn(), signUp: vi.fn(), signOut: vi.fn(), configureCloud: vi.fn(),
-  requestPasswordReset: vi.fn(), resendConfirmation: vi.fn(), syncLibrary: vi.fn(),
+  signIn: vi.fn(), signOut: vi.fn(), configureCloud: vi.fn(),
+  getPrivateCloudAccess: vi.fn(), requestPasswordReset: vi.fn(), syncLibrary: vi.fn(), SyncUserError: class extends Error {},
 }));
 vi.mock('../services/cloud', () => auth);
 vi.mock('./common', () => ({ notify: vi.fn(), useQuery: () => [] }));
 import AccountPanel from './AccountPanel';
 let root: Root; let container: HTMLDivElement;
+const onSignedOut = vi.fn();
 const click = async (text: string) => {
   const button = [...container.querySelectorAll('button')].find(b => b.textContent?.trim() === text);
   expect(button).toBeTruthy(); await act(async () => button!.click());
@@ -22,35 +23,49 @@ const submit = async () => { await act(async () => container.querySelector('.aut
 beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true); vi.clearAllMocks();
   auth.getCloudConfig.mockReturnValue({ url: 'https://test.supabase.co', anonKey: 'sb_publishable_test' });
-  auth.getSession.mockResolvedValue(null); auth.signUp.mockResolvedValue({ session: null });
+  auth.getSession.mockResolvedValue(null); auth.getPrivateCloudAccess.mockResolvedValue('allowed');
   auth.signIn.mockResolvedValue({ user: { id: 'reader', email: 'reader@example.com' } });
+  auth.signOut.mockResolvedValue(undefined);
   auth.requestPasswordReset.mockResolvedValue(undefined);
   window.history.replaceState(null, '', '/open-novel-reader/');
   container = document.createElement('div'); document.body.append(container); root = createRoot(container);
-  await act(async () => root.render(createElement(AccountPanel, { onSignedOut: vi.fn() })));
+  await act(async () => root.render(createElement(AccountPanel, { onSignedOut })));
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
 
-describe('account forms without a live account service', () => {
-  it('registers only matching passwords with a subpath confirmation callback and clears password inputs', async () => {
-    await click('创建新账号'); await type('email', 'reader@example.com'); await type('password', 'unique-password'); await type('confirm-password', 'wrong-password');
-    await submit(); expect(auth.signUp).not.toHaveBeenCalled(); expect(container.textContent).toContain('不一致');
-    await type('confirm-password', 'unique-password'); await submit();
-    expect(auth.signUp).toHaveBeenCalledExactlyOnceWith('reader@example.com', 'unique-password', { emailRedirectTo: 'http://localhost:3000/open-novel-reader/?auth=confirmation' });
-    expect(container.textContent).toContain('请查收确认邮件');
-    expect(container.querySelector<HTMLInputElement>('input[name=password]')?.value).toBe('');
+describe('owner-only account forms without a live account service', () => {
+  it('requires a verified owner for sync, omits public enrollment and leaves local data in place on logout', async () => {
+    expect(container.textContent).toContain('仅供项目所有者使用');
+    expect(container.textContent).not.toMatch(/注册账号|创建新账号/);
+    await type('email', 'reader@example.com'); await type('password', 'unique-password'); await submit();
+    expect(auth.signIn).toHaveBeenCalledExactlyOnceWith('reader@example.com', 'unique-password');
+    expect(auth.getPrivateCloudAccess).toHaveBeenCalledExactlyOnceWith('reader');
+    expect(container.textContent).toContain('已连接私有云');
+    expect(container.textContent).toContain('立即同步');
+    expect(container.textContent).not.toContain('reader@example.com');
+    await click('退出当前设备');
+    expect(auth.signOut).toHaveBeenCalledOnce(); expect(onSignedOut).toHaveBeenCalledOnce();
+    expect(container.textContent).toContain('本机小说、阅读位置和标注仍可离线使用');
+    expect(container.querySelector<HTMLInputElement>('input[name=email]')?.value).toBe('');
+  });
+  it('offers local use and sign-out while withholding sync controls from an authenticated nonowner', async () => {
+    auth.getPrivateCloudAccess.mockResolvedValue('denied');
+    await type('email', 'reader@example.com'); await type('password', 'unique-password'); await submit();
+    expect(container.querySelector('[role=alert]')?.textContent).toContain('访问权限');
+    expect(container.textContent).not.toContain('立即同步');
+    expect(container.textContent).toContain('退出当前设备');
   });
   it('sends an enumeration-safe reset and prevents immediate repeated mail requests', async () => {
     await click('忘记密码？'); await type('email', 'reader@example.com'); await submit();
     expect(auth.requestPasswordReset).toHaveBeenCalledExactlyOnceWith('reader@example.com', 'http://localhost:3000/open-novel-reader/?auth=recovery');
-    expect(container.textContent).toContain('如果此邮箱已注册');
+    expect(container.textContent).toContain('如果此邮箱可以接收账号邮件');
     await submit(); expect(auth.requestPasswordReset).toHaveBeenCalledTimes(1);
   });
-  it('offers confirmation resend after an unconfirmed login instead of claiming login success', async () => {
+  it('explains an existing account’s unconfirmed login without offering enrollment or sync', async () => {
     auth.signIn.mockRejectedValueOnce(new Error('Email not confirmed'));
     await type('email', 'reader@example.com'); await type('password', 'unique-password'); await submit();
-    expect(container.querySelector('[role=alert]')?.textContent).toContain('确认邮件');
-    expect(container.textContent).toContain('重新发送确认邮件');
-    expect(container.textContent).not.toContain('已登录');
+    expect(container.querySelector('[role=alert]')?.textContent).toContain('邮箱尚未验证');
+    expect(container.textContent).not.toContain('重新发送确认邮件');
+    expect(container.textContent).not.toContain('已连接私有云');
   });
 });

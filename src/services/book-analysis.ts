@@ -1,12 +1,11 @@
 import { liveQuery } from 'dexie';
 import { db } from '../core/db';
-import { bookAccountScope, bookOwnerKey, bookOwnerScope } from '../core/book-owner';
+import { bookAccountScope } from '../core/book-owner';
 import type { Chapter, Character, Dialogue, IdentityLocation, ReadingProgress } from '../types';
 import type { SeriesMemorySelection } from '../core/plot-types';
-import { getCloudConfig, getSession } from './cloud';
 import { AI_BOOK_SYSTEM_PROMPT, AI_OUTPUT_LIMIT, MAX_AI_REQUEST_COST_USD } from '../../supabase/functions/_shared/ai-contract';
-import { AIError, AI_MODELS, bookPayloadFor, chunksFor, createBoundAnalysisSession, estimateBookChunk, extractDialogues, extractStoryDialogues, registerBookAnalysis, saveAnalysisChunk, storyChunksFor, validateDeepAttributions, withAnalysisBookLock } from './ai';
-import type { AIModel, DialogueCandidate } from './ai';
+import { AIError, AI_MODELS, analysisBookOwner, bookPayloadFor, chunksFor, createBoundAnalysisSession, estimateBookChunk, extractDialogues, extractStoryDialogues, getLocalAnalysisPrincipal, registerBookAnalysis, saveAnalysisChunk, storyChunksFor, validateDeepAttributions, withAnalysisBookLock } from './ai';
+import type { AIModel, AnalysisProtocol, DialogueCandidate } from './ai';
 import { compareIdentityLocations, createIdentityProjector, projectCharactersAt, validIdentityLocation } from './character-identity';
 import type { IdentityProposal } from './character-identity';
 import type { BookAnalysisBoundary, BookAnalysisController, BookAnalysisEstimate, BookAnalysisJob, BookAnalysisMode, BookAnalysisOptions, BookAnalysisPipeline, BookChapterTask } from './book-analysis-types';
@@ -37,28 +36,15 @@ async function readBookAnalysisJob(id: string): Promise<BookAnalysisJob | undefi
   const value = (await db.settings.get(prefix + id))?.value;
   return validJob(value) ? clone(value) : undefined;
 }
-async function localTaskPrincipal(): Promise<BookAnalysisJob['principal'] | undefined> {
-  const { url: projectUrl } = getCloudConfig();
-  if (!projectUrl) return undefined;
-  let userId: string | undefined;
-  try { userId = (await getSession())?.user.id; }
-  catch {
-    // Same local-view fallback as the shelf. Model calls still require a validated session.
-    try {
-      const saved = JSON.parse(localStorage.getItem(`onr.auth.${new URL(projectUrl).host}`) || 'null');
-      if (typeof saved?.user?.id === 'string') userId = saved.user.id;
-    } catch { /* No usable local account. */ }
-  }
-  return userId && projectUrl === getCloudConfig().url ? { projectUrl, userId } : undefined;
-}
-const samePrincipal = (job: BookAnalysisJob, principal?: BookAnalysisJob['principal']) =>
-  !!principal && job.principal.projectUrl === principal.projectUrl && job.principal.userId === principal.userId;
+const samePrincipal = (job: BookAnalysisJob, principal: BookAnalysisJob['principal']) =>
+  job.principal.projectUrl === principal.projectUrl && job.principal.userId === principal.userId;
 export async function getBookAnalysisJob(id: string): Promise<BookAnalysisJob | undefined> {
-  const [job, principal] = await Promise.all([readBookAnalysisJob(id), localTaskPrincipal()]);
-  return job && samePrincipal(job, principal) ? job : undefined;
+  const job = await readBookAnalysisJob(id);
+  return job && samePrincipal(job, getLocalAnalysisPrincipal()) ? job : undefined;
 }
 export async function listBookAnalysisJobs(bookId: string): Promise<BookAnalysisJob[]> {
-  const [records, principal] = await Promise.all([db.settings.where('id').startsWith(prefix).toArray(), localTaskPrincipal()]);
+  const records = await db.settings.where('id').startsWith(prefix).toArray();
+  const principal = getLocalAnalysisPrincipal();
   return records.map(record => record.value).filter(validJob).filter(job => job.bookId === bookId && samePrincipal(job, principal)).sort((a, b) => b.updatedAt - a.updatedAt).map(clone);
 }
 export function getActiveBookController(bookId: string) { return active.get(bookId); }
@@ -214,12 +200,13 @@ export function analyzeBook(options: BookAnalysisOptions): BookAnalysisControlle
     if (!Number.isFinite(options.budgetUsd) || options.budgetUsd <= 0 || options.budgetUsd > MAX_BOOK_ANALYSIS_BUDGET_USD) throw new BookAnalysisError(`整书总预算须在 $0–$${MAX_BOOK_ANALYSIS_BUDGET_USD} 之间。`);
     if (!AI_MODELS.some(model => model.id === options.model) || !['deep', 'reading-progress'].includes(options.mode)) throw new BookAnalysisError('模型或分析模式无效。');
     const id = options.jobId || crypto.randomUUID();
-    const session = await createBoundAnalysisSession(() => controller.cancel());
+    const session = createBoundAnalysisSession(() => controller.cancel());
     const assertWork = () => { session.assert(); if (cancelled) throw new BookAnalysisError('任务已停止；已完成结果保留。'); };
     try {
       const source = await bookSource(options.bookId);
-      const ownerKey = bookOwnerKey(options.bookId);
-      const readOwner = async () => bookOwnerScope((await db.settings.get(ownerKey))?.value, session.principal.projectUrl);
+      const { projectUrl, userId } = session.principal;
+      const readOwner = () => analysisBookOwner(options.bookId, projectUrl);
+      const memoryPrincipal = userId ? session.principal : undefined;
       const ownerAtStart = await readOwner();
       if (ownerAtStart && ownerAtStart !== bookAccountScope(session.principal.projectUrl, session.principal.userId)) {
         throw new BookAnalysisError('当前书籍不属于本次登录账号。');
@@ -280,7 +267,7 @@ export function analyzeBook(options: BookAnalysisOptions): BookAnalysisControlle
         }
       };
       const reserve = async (amountUsd: number) => {
-        if (!Number.isFinite(amountUsd) || amountUsd <= 0 || amountUsd > MAX_AI_REQUEST_COST_USD) throw new BookAnalysisError('当前分片超过代理单请求费用边界，未发起请求。');
+        if (!Number.isFinite(amountUsd) || amountUsd <= 0 || amountUsd > MAX_AI_REQUEST_COST_USD) throw new BookAnalysisError('当前分片超过单请求费用限制，未发起请求。');
         const reservedJob = await db.transaction('rw', db.settings, async () => {
           assertWork(); const record = (await db.settings.get(ledgerId))?.value;
           if (!object(record) || record.signature !== signature || record.budgetUsd !== job!.budgetUsd || record.reservedUsd !== job!.reservedUsd) throw new BookAnalysisError('本机整书预算记录不匹配，任务安全停止。');
@@ -345,7 +332,7 @@ export function analyzeBook(options: BookAnalysisOptions): BookAnalysisControlle
       };
       const checkSource = async (entry: BookChapterTask) => {
         processingEntryId = entry.id;
-        await waitIfPaused(); await session.check(); assertWork();
+        await waitIfPaused(); assertWork();
         const original = chaptersById.get(entry.chapterId)!;
         const [freshBook, freshChapter, owner] = await Promise.all([db.books.get(options.bookId), db.chapters.get(entry.chapterId), readOwner()]);
         if (!freshBook || freshBook.deletedAt || freshBook.fingerprint !== source.fingerprint || !freshChapter || freshChapter.bookId !== options.bookId ||
@@ -357,19 +344,19 @@ export function analyzeBook(options: BookAnalysisOptions): BookAnalysisControlle
         if (summaryOnly) await assertRecapRead(original, source.chapters);
         return { original, chapter: chapterAtBoundary(original, entry.scopeEnd)! };
       };
-      const performRequest = async (entry: BookChapterTask, protocol: string, system: string, input: unknown, reservation: number): Promise<unknown> => {
+      const performRequest = async (entry: BookChapterTask, protocol: AnalysisProtocol, system: string, input: unknown, reservation: number): Promise<unknown> => {
         await waitIfPaused(); assertWork();
         await checkSource(entry);
         await reserve(reservation);
         assertWork();
         abort = new AbortController();
         const response = await session.request({ action: 'analyze', protocol, authorized: true, model: options.model, maxTokens: AI_OUTPUT_LIMIT, system, input, maxCostUsd: reservation }, abort.signal) as { choices?: { finish_reason?: string; message?: { content?: string } }[] };
-        assertWork(); const choice = response.choices?.[0];
+        assertWork(); const choice = response?.choices?.[0];
         if (choice?.finish_reason !== 'stop' || typeof choice.message?.content !== 'string') throw new BookAnalysisError('模型输出不完整，任务已停止；请重新授权后手动重试。');
         try { return JSON.parse(choice.message.content) as unknown; } catch { throw new BookAnalysisError('模型返回的 JSON 无法解析，任务已停止。'); }
       };
       const memoryAt = (scope: IdentityLocation, query: string, nearbyCharacterIds?: readonly string[]) =>
-        retrievePlotMemory({ bookId: options.bookId, scope, selections, query, principal: session.principal, nearbyCharacterIds });
+        retrievePlotMemory({ bookId: options.bookId, scope, selections, query, principal: memoryPrincipal, nearbyCharacterIds });
       const sendPlot = async (entry: BookChapterTask, window: PlotWindow, index: number) => {
         const { original, chapter } = await checkSource(entry);
         const cutoff = { ...window.through, chapterId: chapter.id };
@@ -380,7 +367,7 @@ export function analyzeBook(options: BookAnalysisOptions): BookAnalysisControlle
           language: /^zh(?:-|$)/i.test(source.language) ? 'zh' : 'en',
           // A saved summary is shareable with this book alone. Never send cross-book text into recap generation.
           memory: await retrievePlotMemory({ bookId: options.bookId, scope: window.from,
-            query: excerpt.paragraphs.join('\n'), principal: session.principal }),
+            query: excerpt.paragraphs.join('\n'), principal: memoryPrincipal }),
         };
         if (!validStoryPlotInput(input)) throw new BookAnalysisError('剧情分片超过安全边界，未发起请求。');
         const output = await performRequest(entry, STORY_PLOT_PROTOCOL, STORY_PLOT_SYSTEM_PROMPT, input,
@@ -388,7 +375,7 @@ export function analyzeBook(options: BookAnalysisOptions): BookAnalysisControlle
         if (!validStoryPlotOutput(output, input)) throw new BookAnalysisError('剧情输出缺少可核对的原文证据，当前分片未保存。');
         const result = validatePlotOutput(output, original, window.context, known.map(person => person.id),
           input.memory.flatMap(hint => hint.eventId ? [hint.eventId] : []));
-        await session.check(); assertWork();
+        assertWork();
         const nextJob = clone(job!);
         const nextEntry = nextJob.chapters.find(item => item.id === entry.id)!;
         nextEntry.completedPlotRequests = index + 1;
@@ -399,7 +386,7 @@ export function analyzeBook(options: BookAnalysisOptions): BookAnalysisControlle
           assertWork();
           if (await readOwner() !== ownerAtStart) throw new BookAnalysisError('书籍所属账号已变化，本分片未保存。');
           const membership = await getSeriesMembership(options.bookId, {
-            origin: session.principal.projectUrl, userId: session.principal.userId, assertCurrent: assertWork,
+            origin: projectUrl, userId: userId || undefined, assertCurrent: assertWork,
           });
           await commitPlotWindow({
             chapter: original, output: result, windowId: `${id}:${entry.id}:${index}`,
@@ -431,7 +418,7 @@ export function analyzeBook(options: BookAnalysisOptions): BookAnalysisControlle
         let rows;
         try { rows = story ? storyAttributions(value, candidates, input as StorySpeechInput) : validateDeepAttributions(value, candidates, input); }
         catch { throw new BookAnalysisError('对白编号、人物 ID 或原文证据不匹配，当前分片未保存。'); }
-        await session.check(); assertWork();
+        assertWork();
         const nextJob = clone(job!); const nextEntry = nextJob.chapters.find(item => item.id === entry.id)!;
         if (review) nextEntry.reviewCompleted = true; else { nextEntry.completedChunks = completedChunks; nextEntry.status = completedChunks === entry.totalChunks ? 'done' : 'running'; }
         nextJob.completedChunks = nextJob.chapters.reduce((sum, item) => sum + item.completedChunks, 0);
@@ -446,11 +433,7 @@ export function analyzeBook(options: BookAnalysisOptions): BookAnalysisControlle
         job = nextJob; Object.assign(entry, nextEntry); announce();
       };
       announce();
-      abort = new AbortController();
-      const preflight = await session.request({ action: 'status' }, abort.signal) as { ready?: boolean; protocols?: string[] };
       assertWork();
-      const protocols = story ? [STORY_PLOT_PROTOCOL, STORY_IDENTITY_PROTOCOL] : ['identity-v1'];
-      if (!preflight?.ready || !Array.isArray(preflight.protocols) || protocols.some(protocol => !preflight.protocols!.includes(protocol))) throw new BookAnalysisError('当前云代理尚未支持本次整书分析协议，请先更新代理。');
       while (!cancelled) {
         await waitIfPaused();
         await appendScope(await currentBoundary(options.bookId, planChapters, options.mode));

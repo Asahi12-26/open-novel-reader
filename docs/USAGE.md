@@ -3,10 +3,10 @@
 ## 选择平台
 
 - **Web / PWA：** 打开 [公开阅读器](https://asahi12-26.github.io/open-novel-reader/)，无需注册即可导入小说。首次联网打开并完成应用缓存后可离线再开；浏览器支持时可用菜单中的安装应用功能。
-- **Windows x64** 下载并运行安装向导。安装包未配置发布者签名。 [下载 V0.5 Beta 1 EXE](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.5.0-beta.1/Open-Novel-Reader_0.5.0-beta.1_windows-x64-setup.exe)
-- **Android ARM64** 最低 Android 8，V0.5 Beta 1 的 versionCode 为 5001。0.2 起的正式签名版可覆盖升级。仍在使用 0.1 开发签名版时，先导出并保留书库备份，再卸载、安装新版并恢复。 [下载 V0.5 Beta 1 APK](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.5.0-beta.1/Open-Novel-Reader_0.5.0-beta.1_android-arm64.apk)
+- **Windows x64** 下载并运行安装向导。安装包未配置发布者签名。 [下载 V0.6.1 Beta 1 EXE](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.6.1-beta.1/Open-Novel-Reader_0.6.1-beta.1_windows-x64-setup.exe)
+- **Android ARM64** 最低 Android 8，V0.6.1 Beta 1 的 versionCode 为 6011。0.2 起的正式签名版可覆盖升级。仍在使用 0.1 开发签名版时，先导出并保留书库备份，再卸载、安装新版并恢复。 [下载 V0.6.1 Beta 1 APK](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.6.1-beta.1/Open-Novel-Reader_0.6.1-beta.1_android-arm64.apk)
 
-Web、Windows 与 Android 的本机书库分别保存。登录同一账号并逐本允许上传后，可通过云端同步。 [V0.5 Beta 1 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.5.0-beta.1) · [下载校验值](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.5.0-beta.1/SHA256SUMS.txt) · [历史升级验证](../PROJECT_STATUS.md)
+Web、Windows 与 Android 各自保存本机书库。可用 ZIP 在设备间迁移。 [V0.6.1 Beta 1 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.6.1-beta.1) · [下载校验值](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.6.1-beta.1/SHA256SUMS.txt) · [历史升级验证](../PROJECT_STATUS.md)
 
 ## 导入与阅读
 
@@ -20,19 +20,17 @@ TXT 支持 UTF-8、GB18030 和带 BOM 的 UTF-16。EPUB 目前按文字阅读，
 
 ## 管理书架与备份
 
-封面旁的「…」打开书籍详情，可修改书名、作者、封面、分类或删除书籍。分类可以在侧栏添加，也可通过「设置与云同步 → 通用与备份」管理。书架提供搜索、排序与最近阅读。
+封面旁的「…」打开书籍详情，可修改书名、作者、封面、分类或删除书籍。分类可以在侧栏添加，也可通过「设置」管理。书架提供搜索、排序与最近阅读。
 
-点击书架底部的「导出备份」，或进入「通用与备份 → 导出完整备份」，保存 `.json` 文件。备份包含小说原文、进度、书签及人物数据；不包含 API Key 和账号会话。「恢复备份」先校验数据，再合并到现有书库，保留无关书籍；恢复的书不会因此自动获准上传云端。
+打开「设置 → 数据备份与恢复」，保存完整 ZIP。可以合并 ZIP 或旧 JSON，也可先保存安全备份后明确替换当前本地书库。ZIP 包含书籍、人物、头像、系列、剧情及阅读设置。 [备份和恢复步骤](V061_LOCAL_FIRST.md#完整备份与恢复)
 
 清除网站数据、清除应用数据或卸载可能移除本机书库。更新、换设备或更换 Android 签名包前先导出备份，保留原安装环境直至确认恢复成功。当前恢复文件上限为 256 MiB，尚无大书库分卷导出，请同时保留小说原文件。当前没有二进制自动更新器。
 
-## 可选的账号、同步与 AI
+## 配置 AI 和私人云
 
-本地阅读无需账号。本人测试云项目已内置，使用已确认的测试邮箱在「账号与云同步」登录，三个平台使用同一账号。新注册暂限 Supabase 组织成员邮箱，公开注册与完整密码找回待正式 SMTP 配置后开放。自建用户可在高级选项按 [云服务配置](CLOUD_SETUP.md)填写自己的公开 URL / publishable key。
+本地阅读和 AI 无需阅见账号。在「AI 模型」载入自己的 DeepSeek API Key，按需测试连接。测试只查询模型。Key 保存在当前会话内存，刷新或关闭后需重新输入。 [AI 配置步骤](V061_LOCAL_FIRST.md#配置自己的-deepseek-api-key)
 
-选择一本小测试书，在详情中允许上传，点击「立即同步」；另一台设备用同一账号登录并同步，检查原文件、章节、书签和阅读设置。断网仍可阅读，恢复连接后继续同步。未选择的本机新书不会自动上传。退出账号不会删除本机书库；共用设备请使用独立浏览器配置或系统账号。
-
-AI 使用已配置的 Supabase 代理、已登录账号和自己的 DeepSeek API Key。本人测试项目的代理已部署。在「AI 模型」先点「检查代理（不调用模型）」即可验证登录和代理，无需密钥、不会访问 DeepSeek。之后自行载入密钥，可选择「测试连接（仅查询模型）」。密钥只放本次会话内存，刷新、退出或切换账号后需重新输入，不会写入备份或同步记录。不要把密钥发到聊天。
+已有授权的开发者可通过「私人云同步」登录。同步书籍前，在该书的详情里允许上传。其他读者可使用 ZIP 在设备间迁移。 [私人云说明](CLOUD_SETUP.md)
 
 阅读时打开「章节人物识别」。可选择逐章分析，也可打开「整书分析」，选择阅读进度模式或整本书深度模式。核对请求量、费用估算和固定总预算后勾选授权，任务便会逐段识别对白、保存结果。阅读进度模式仅处理已读内容，收起面板后可随阅读继续。全书结果在阅读页默认按当前阅读位置隐藏剧透。人物管理支持新建、改名与合并，人工纠正优先。
 

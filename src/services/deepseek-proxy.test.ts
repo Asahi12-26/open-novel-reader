@@ -21,7 +21,9 @@ const request = (body: unknown, headers: Record<string, string> = {}, signal?: A
 function fixture(overrides: Partial<ProxyDependencies> = {}) {
   const authenticate = vi.fn(async () => 'fixture-user');
   const upstream = vi.fn(async () => new Response(JSON.stringify(answer()), { headers: { 'content-type': 'application/json' } }));
-  return { handler: createDeepseekProxy({ authenticate, fetch: upstream as typeof fetch, ...overrides }), authenticate, upstream };
+  const reserve = vi.fn<ProxyDependencies['reserve']>(async () => 'ALLOWED');
+  const release = vi.fn<ProxyDependencies['release']>(async () => {});
+  return { handler: createDeepseekProxy({ authenticate, reserve, release, fetch: upstream as typeof fetch, ...overrides }), authenticate, upstream, reserve, release };
 }
 afterEach(() => vi.restoreAllMocks());
 
@@ -58,6 +60,48 @@ describe('DeepSeek proxy auth and origin boundary (offline only)', () => {
     expect((await handler(new Request('https://example.invalid', { headers: { origin: ORIGIN } }))).status).toBe(405);
     expect((await handler(request({}, { 'content-type': 'text/plain' }))).status).toBe(415);
     expect(upstream).not.toHaveBeenCalled();
+  });
+});
+
+describe('server-side admission protects provider and runtime across requests', () => {
+  it('stops rate-limited and unavailable requests before upstream', async () => {
+    const reserve = vi.fn<ProxyDependencies['reserve']>().mockResolvedValueOnce('PROJECT_LIMIT').mockRejectedValueOnce(new Error(KEY));
+    const { handler, upstream, release } = fixture({ reserve });
+    expect(await (await handler(request(analysis()))).json()).toEqual({ error: 'PROJECT_LIMIT' });
+    expect(release).not.toHaveBeenCalled();
+    const failure = await handler(request(analysis()));
+    expect(failure.status).toBe(503);
+    expect(await failure.json()).toEqual({ error: 'ADMISSION_UNAVAILABLE' });
+    expect(upstream).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledWith('fixture-user', expect.any(String));
+    expect(JSON.stringify(reserve.mock.calls)).not.toContain(KEY);
+  });
+
+  it('admits only validated operations and releases the exact provider lease after failures', async () => {
+    const upstream = vi.fn(async () => new Response(null, { status: 429 }));
+    const { handler, reserve, release } = fixture({ fetch: upstream as typeof fetch });
+    expect((await handler(request({ ...analysis(), authorized: false }))).status).toBe(403);
+    expect(reserve).not.toHaveBeenCalled();
+    expect((await handler(request({ action: 'status' }))).status).toBe(200);
+    expect(upstream).not.toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
+    expect((await handler(request(analysis()))).status).toBe(429);
+    expect(upstream).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledWith('fixture-user', reserve.mock.calls[1][2]);
+  });
+
+  it('bounds pending authentication even when no provider slot has been reserved', async () => {
+    let finish!: (value: string) => void;
+    const authentication = new Promise<string>(resolve => { finish = resolve; });
+    const authenticate = vi.fn(async () => authentication);
+    const { handler, upstream } = fixture({ authenticate });
+    const held = Array.from({ length: 24 }, () => handler(request({ action: 'status' })));
+    try {
+      const busy = await handler(request({ action: 'status' }));
+      expect([busy.status, await busy.json()]).toEqual([429, { error: 'PROJECT_BUSY' }]);
+      expect(authenticate).toHaveBeenCalledTimes(24);
+      expect(upstream).not.toHaveBeenCalled();
+    } finally { finish('fixture-user'); await Promise.all(held); }
   });
 });
 

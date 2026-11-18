@@ -3,8 +3,11 @@ import 'fake-indexeddb/auto';
 import { Blob as NodeBlob, File as NodeFile } from 'node:buffer';
 import { webcrypto } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import JSZip from 'jszip';
 import { db } from './db';
-import { deleteBook, exportBackup, importBook, listChapters, restoreBackup, saveProgress } from './library';
+import { deleteBook, exportBackup, exportZipBackup, importBook, listChapters, restoreBackup, restoreZipBackup, saveProgress } from './library';
+import { defaultPreferences } from '../types';
+import { seriesBookId } from './series-types';
 
 vi.stubGlobal('File', NodeFile);
 vi.stubGlobal('Blob', NodeBlob);
@@ -129,5 +132,84 @@ describe('local-first persistence', () => {
     expect((await db.dialogues.get('dialogue-1'))?.source).toBe('manual');
     expect((await db.dialogues.get('dialogue-1'))?.characterId).toBe('human-character');
     expect((await db.progress.get(book.id))?.chapterId).toBe(chapters[1].id);
+  });
+});
+
+describe('portable ZIP backup', () => {
+  it('writes original bytes separately and restores reading data, summaries, plot events and a local series', async () => {
+    const book = await importBook(novel());
+    const [chapter] = await listChapters(book.id);
+    const text = chapter.paragraphs[0];
+    const end = { chapterIndex: 0, paragraphIndex: 0, offset: text.length };
+    const evidence = { chapterId: chapter.id, paragraphIndex: 0, start: 0, end: text.length, text };
+    const seriesId = '387e92d7-6f31-438c-bcea-2305ebf4b665';
+    await saveProgress(book.id, chapter.id, 0, 2);
+    await db.settings.put({ id: 'preferences', value: { ...defaultPreferences, theme: 'dark', privateToken: 'DO-NOT-ARCHIVE-TOKEN' } });
+    await db.settings.put({ id: 'book-analysis-budget:example', value: 'DO-NOT-ARCHIVE-LEDGER' });
+    await db.series.put({ id: seriesId, name: '测试系列', scope: 'local', updatedAt: 1 });
+    await db.seriesBooks.put({ id: seriesBookId(seriesId, book.id), seriesId, bookId: book.id, scope: 'local', position: 0, updatedAt: 2 });
+    await db.plotEvents.put({ id: 'plot-1', bookId: book.id, chapterId: chapter.id, seriesId,
+      order: { ...end, offset: 0 }, revisions: [{ id: 'note-1', description: '小雨在打招呼', evidence, visibleAt: end, characterIds: [], confidence: .95, status: 'active', kind: 'fact', source: 'ai', updatedAt: 3 }] });
+    await db.chapterSummaries.put({ chapterId: chapter.id, bookId: book.id,
+      fragments: [{ id: 'fragment-1', from: { ...end, offset: 0 }, through: end, text: '相遇', evidence: [evidence], characterIds: [], model: 'fixture', updatedAt: 4 }], revisions: [] });
+    const archive = await exportZipBackup();
+    const zip = await JSZip.loadAsync(await archive.arrayBuffer());
+    expect(Object.keys(zip.files).sort()).toEqual(['files/0.bin', 'manifest.json']);
+    const manifest = await zip.file('manifest.json')!.async('text');
+    expect(manifest).not.toMatch(/DO-NOT-ARCHIVE|base64/);
+    expect(await zip.file('files/0.bin')!.async('text')).toBe(await novel().text());
+    await db.delete(); await db.open();
+    await restoreZipBackup(new File([archive], 'local-backup.zip'), { mode: 'merge' });
+    expect(await db.books.get(book.id)).toMatchObject({ id: book.id, cloudEnabled: false });
+    expect(await db.progress.get(book.id)).toMatchObject({ chapterId: chapter.id, offset: 2 });
+    expect(await db.settings.get('preferences')).toMatchObject({ value: { theme: 'dark' } });
+    expect(await db.seriesBooks.get(seriesBookId(seriesId, book.id))).toBeDefined();
+    expect(await db.plotEvents.get('plot-1')).toMatchObject({ bookId: book.id });
+    expect((await db.chapterSummaries.get(chapter.id))?.fragments[0].text).toBe('相遇');
+  });
+
+  it('replaces only device-local books and keeps live owner data and preferences unchanged', async () => {
+    const saved = await importBook(novel());
+    const cloud = await importBook(new File(['Chapter One\nOwner-owned original.'], 'Cloud.txt'));
+    await db.settings.put({ id: `cloud-owner:${cloud.id}`, value: 'https://test.example|owner' });
+    await db.books.update(cloud.id, { cloudEnabled: true });
+    const backup = await exportZipBackup();
+    const newLocal = await importBook(new File(['Chapter One\nOnly on this device since the backup.'], 'New.txt'));
+    await db.books.update(cloud.id, { title: 'Updated private title' });
+    await db.books.update(saved.id, { title: 'Changed local title' });
+    await db.settings.put({ id: 'cloud-profile-owner', value: 'https://test.example|owner' });
+    await db.settings.put({ id: 'preferences', value: { ...defaultPreferences, theme: 'sepia' } });
+    await restoreZipBackup(new File([backup], 'local-backup.zip'), { mode: 'replace' });
+    expect(await db.books.get(newLocal.id)).toBeUndefined();
+    expect(await db.files.get(newLocal.id)).toBeUndefined();
+    expect(await listChapters(newLocal.id)).toEqual([]);
+    expect(await db.books.get(saved.id)).toMatchObject({ title: saved.title, cloudEnabled: false });
+    expect(await db.books.get(cloud.id)).toMatchObject({ title: 'Updated private title', cloudEnabled: true });
+    expect(await db.settings.get(`cloud-owner:${cloud.id}`)).toMatchObject({ value: 'https://test.example|owner' });
+    expect(await db.settings.get('preferences')).toMatchObject({ value: { theme: 'sepia' } });
+  });
+
+  it('rejects unexpected entries, missing original, CRC damage or a corrupt legacy JSON replacement atomically', async () => {
+    const original = await importBook(novel());
+    const backup = await exportZipBackup();
+    const bytes = await backup.arrayBuffer();
+    const file = (value: BlobPart) => new File([value], 'backup.zip');
+    const bad = new JSZip();
+    bad.file('../extra.txt', 'unexpected', { createFolders: false });
+    await expect(restoreZipBackup(file(await bad.generateAsync({ type: 'arraybuffer' })), { mode: 'replace' })).rejects.toThrow('未被修改');
+
+    const missing = await JSZip.loadAsync(bytes);
+    missing.remove('files/0.bin');
+    await expect(restoreZipBackup(file(await missing.generateAsync({ type: 'arraybuffer' })), { mode: 'replace' })).rejects.toThrow('未被修改');
+
+    const corrupt = new Uint8Array(bytes.slice(0));
+    const header = new DataView(corrupt.buffer);
+    const firstPayload = 30 + header.getUint16(26, true);
+    corrupt[firstPayload] ^= 1;
+    await expect(restoreZipBackup(file(corrupt), { mode: 'replace' })).rejects.toThrow('未被修改');
+
+    await expect(restoreZipBackup(new File([await exportBackup()], 'legacy.json'), { mode: 'replace' })).rejects.toThrow('只能合并');
+    expect(await db.books.get(original.id)).toEqual(original);
+    expect(await (await db.files.get(original.id))!.bytes.text()).toBe(await novel().text());
   });
 });

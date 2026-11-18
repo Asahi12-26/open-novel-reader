@@ -1,5 +1,12 @@
 # PROJECT_STATUS
 
+## V0.6.1 本地优先与私人云
+
+- 默认从本地书架开始。访客可保存和管理人物、头像、系列、剧情、阅读位置与人工纠错。沿用 IndexedDB 版本 3，单章和整书任务的原设备账本保留。 [使用与升级](docs/V061_LOCAL_FIRST.md)
+- 新增跨平台 ZIP 导出、合并和本地替换。旧 JSON 仍可合并。替换前校验安全备份并确认，验证或事务失败时保留现有数据。 [备份与恢复](docs/V061_LOCAL_FIRST.md#完整备份与恢复)
+- 托管 Auth 已关闭新注册及匿名登录。现有唯一库主 UID 已加入服务端白名单，SQL 验证该账号仍可读原记录、设置和 Storage。另一真实数据库角色的跨账号访问和未获准上传均被拒绝，测试事务全部回滚。旧版代理第 4 版按同一白名单鉴权，并通过线上匿名拒绝验证。 [权限与配置](docs/CLOUD_SETUP.md)
+- 三端直连 DeepSeek，普通用户无需登录。官方接口返回在线版、HTTPS WebView 与 Tauri 方案来源所需的 CORS 响应。现有逐章与整书用模拟请求回归，真实收费生成次数为 0。 [独立 AI 使用说明](docs/V061_LOCAL_FIRST.md#配置自己的-deepseek-api-key)
+
 ## V0.6 剧情理解与系列记忆
 
 - `v0.6.0-beta.1` 已发布，源码提交 `12399c0`。Android versionCode 为 `6001`，公开 APK 沿用固定应用标识和发布证书。IndexedDB 增量升级至版本 3，保留旧书库、人物 ID 与已有任务。 [Beta 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.6.0-beta.1)

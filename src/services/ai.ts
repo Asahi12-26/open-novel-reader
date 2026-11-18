@@ -1,7 +1,10 @@
 import { db } from '../core/db';
-import { getCloudConfig, getSession, subscribeAuth } from './cloud';
+import { bookAccountScope, bookOwnerKey, bookOwnerScope } from '../core/book-owner';
+import { getCloudConfig } from './cloud';
 import type { AnalysisJob, Chapter, Character, Dialogue, IdentityLocation } from '../types';
 import { AI_MODELS, AI_SYSTEM_PROMPT as SYSTEM_PROMPT, AI_BOOK_SYSTEM_PROMPT, AI_OUTPUT_LIMIT as OUTPUT_LIMIT, AI_COST_MARGIN, AI_TOKEN_OVERHEAD, MAX_AI_REQUEST_COST_USD } from '../../supabase/functions/_shared/ai-contract';
+import { STORY_IDENTITY_PROTOCOL, STORY_IDENTITY_SYSTEM_PROMPT, STORY_PLOT_PROTOCOL, STORY_PLOT_SYSTEM_PROMPT, validStoryPlotInput, validStorySpeechInput } from '../../supabase/functions/_shared/story-contract';
+import { readBoundedJSON } from '../../supabase/functions/_shared/bounded-request';
 import { applyIdentityProposal, indexCharacterIntroductions, initializeCharacterIdentity, manualMergeCharacters, manualRenameCharacter } from './character-identity';
 import type { IdentityProposal } from './character-identity';
 
@@ -187,83 +190,122 @@ export function estimateAnalysis(chapter: Chapter, model: AIModel = 'deepseek-fl
     inputTokensUpperBound: costs.reduce((sum, c) => sum + c.input, 0), outputTokensUpperBound: chunks.length * OUTPUT_LIMIT,
     estimatedMaxUsd: costs.reduce((sum, c) => sum + c.usd, 0) };
 }
-interface RequestContext { key: string; epoch: number; config: ReturnType<typeof getCloudConfig>; userId: string; invalid?: boolean }
+export interface LocalAnalysisPrincipal { projectUrl: string; userId: string }
+
+/** Local checkpoint ownership only. The provider needs no cloud session or reader account. */
+export function getLocalAnalysisPrincipal(): LocalAnalysisPrincipal {
+  const { url } = getCloudConfig();
+  if (url) try {
+    const saved = JSON.parse(localStorage.getItem(`onr.auth.${new URL(url).host}`) || 'null');
+    if (typeof saved?.user?.id === 'string' && saved.user.id && !saved.user.is_anonymous) return { projectUrl: url, userId: saved.user.id };
+  } catch { /* Local session unavailable; use the device's local checkpoint scope. */ }
+  return { projectUrl: '', userId: '' };
+}
+
+export async function analysisBookOwner(bookId: string, projectUrl: string): Promise<string | undefined> {
+  const value = (await db.settings.get(bookOwnerKey(bookId)))?.value;
+  return bookOwnerScope(value, projectUrl) ?? (typeof value === 'string' && value ? value : undefined);
+}
+
+interface RequestContext { key: string; epoch: number; principal: LocalAnalysisPrincipal; invalid?: boolean }
+const supportedProtocols = ['identity-v1', STORY_PLOT_PROTOCOL, STORY_IDENTITY_PROTOCOL] as const;
+export type AnalysisProtocol = typeof supportedProtocols[number];
+interface GenerationRequest {
+  action: 'analyze'; authorized: true; model: AIModel; maxTokens: number;
+  protocol?: AnalysisProtocol; system: string; input: unknown; maxCostUsd: number;
+}
+const systemForProtocol: Record<AnalysisProtocol, string> = {
+  'identity-v1': AI_BOOK_SYSTEM_PROMPT, [STORY_PLOT_PROTOCOL]: STORY_PLOT_SYSTEM_PROMPT, [STORY_IDENTITY_PROTOCOL]: STORY_IDENTITY_SYSTEM_PROMPT,
+};
+
+function contextChanged(context: RequestContext) {
+  const current = getLocalAnalysisPrincipal();
+  return context.epoch !== keyEpoch || context.principal.userId !== current.userId || context.principal.projectUrl !== current.projectUrl;
+}
 function assertContext(context: RequestContext) {
-  const current = getCloudConfig();
-  if (context.invalid || context.epoch !== keyEpoch || current.url !== context.config.url || current.anonKey !== context.config.anonKey) { context.invalid = true; throw new AIError('账号、代理或会话密钥已变化，原任务已停止。'); }
+  if (context.invalid || contextChanged(context)) {
+    context.invalid = true;
+    throw new AIError('本机书库账号或会话密钥已变化，原任务已停止。');
+  }
 }
-async function currentSession(context: RequestContext) {
+function requestContext(): RequestContext {
+  if (!apiKey) throw new AIError('请先输入本次会话使用的 DeepSeek API Key。');
+  return { key: apiKey, epoch: keyEpoch, principal: getLocalAnalysisPrincipal() };
+}
+function generationBody(request: GenerationRequest): string {
+  const model = modelInfo(request.model);
+  const expectedSystem = request.protocol ? systemForProtocol[request.protocol] : SYSTEM_PROMPT;
+  if (request.authorized !== true || request.system !== expectedSystem || !Number.isInteger(request.maxTokens) || request.maxTokens <= 0 || request.maxTokens > OUTPUT_LIMIT) throw new AIError('分析授权或请求参数无效。');
+  if ((request.protocol === STORY_PLOT_PROTOCOL && !validStoryPlotInput(request.input)) ||
+      (request.protocol === STORY_IDENTITY_PROTOCOL && !validStorySpeechInput(request.input))) throw new AIError('当前分析片段的结构或范围无效。');
+  const input = JSON.stringify(request.input);
+  const inputUpper = encoder.encode(request.system + input).length + AI_TOKEN_OVERHEAD;
+  const estimate = AI_COST_MARGIN * (inputUpper * model.inputPerMillion + request.maxTokens * model.outputPerMillion) / 1_000_000;
+  if (!Number.isFinite(request.maxCostUsd) || request.maxCostUsd > MAX_AI_REQUEST_COST_USD || request.maxCostUsd + 1e-9 < estimate) throw new AIError('当前片段超出费用预留，未发送请求。');
+  const body = JSON.stringify({ model: model.id, messages: [{ role: 'system', content: expectedSystem }, { role: 'user', content: input }],
+    thinking: { type: 'disabled' }, response_format: { type: 'json_object' }, max_tokens: request.maxTokens, stream: false, temperature: 0.2 });
+  if (encoder.encode(body).length > 160000) throw new AIError('当前片段超过请求体积限制，未发送请求。');
+  return body;
+}
+async function callDeepSeek(context: RequestContext, body?: string, signal?: AbortSignal): Promise<unknown> {
   assertContext(context);
-  let session;
-  try { session = await getSession(); } catch { throw new AIError('无法恢复登录状态，请重新登录后重试。'); }
-  assertContext(context);
-  if (!session || session.user.id !== context.userId) { context.invalid = true; throw new AIError('登录账号已变化，原任务已停止。'); }
-  return session;
-}
-async function requestContext(requireKey: boolean): Promise<RequestContext> {
-  const key = apiKey; const epoch = keyEpoch; const config = getCloudConfig();
-  if (requireKey && !key) throw new AIError('请先输入本次会话使用的 DeepSeek API Key。');
-  let session;
-  try { session = await getSession(); } catch { throw new AIError('无法恢复登录状态，请重新登录后重试。'); }
-  if (!session) throw new AIError('AI 代理需要登录账号。请先配置云端并登录。');
-  const context = { key, epoch, config, userId: session.user.id };
-  assertContext(context); return context;
-}
-async function callProxy(body: { action: string; [key: string]: unknown }, signal?: AbortSignal, bound?: RequestContext): Promise<unknown> {
-  const context = bound || await requestContext(body.action !== 'status');
-  const session = await currentSession(context);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 120000);
+  const timer = setTimeout(() => controller.abort(), body ? 120000 : 15000);
   const abort = () => controller.abort();
   signal?.addEventListener('abort', abort, { once: true });
   if (signal?.aborted) controller.abort();
   try {
     if (controller.signal.aborted) throw new AIError('请求已取消，已发生的费用不能撤销。');
-    const response = await fetch(`${context.config.url}/functions/v1/deepseek-proxy`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}`, apikey: context.config.anonKey },
-      body: JSON.stringify({ ...body, ...(body.action === 'status' ? {} : { apiKey: context.key }) }), signal: controller.signal,
+    const response = await fetch(body ? 'https://api.deepseek.com/chat/completions' : 'https://api.deepseek.com/models', {
+      method: body ? 'POST' : 'GET', redirect: 'error', credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer',
+      headers: { Authorization: `Bearer ${context.key}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body, signal: controller.signal,
     });
-    await currentSession(context);
+    assertContext(context);
     if (!response.ok) {
-      // Never include upstream response bodies, request headers, or API keys in errors/logs.
-      const message = response.status === 401 ? '登录或 API Key 无效。' : response.status === 402 ? 'DeepSeek 余额不足。' : response.status === 429 ? '请求过于频繁，请稍后手动重试。' : `AI 代理请求失败 (${response.status})。`;
+      void response.body?.cancel().catch(() => undefined);
+      const message = response.status === 401 || response.status === 403 ? 'DeepSeek 拒绝访问，请核对本次会话的 API Key 和账号权限。'
+        : response.status === 402 ? 'DeepSeek 余额不足。'
+        : response.status === 429 ? 'DeepSeek 请求达到频率或并发限制。请稍后手动重试。'
+        : `DeepSeek 请求失败 (${response.status})。`;
       throw new AIError(message);
     }
-    return await response.json();
+    let value: unknown;
+    try { value = await readBoundedJSON(response, 131072, controller.signal); }
+    catch { if (!controller.signal.aborted) throw new AIError('DeepSeek 返回的内容过大或格式无效。'); throw new Error('aborted'); }
+    assertContext(context);
+    if (controller.signal.aborted) throw new Error('aborted');
+    return value;
   } catch (error) {
     if (error instanceof AIError) throw error;
-    throw new AIError('代理网络请求失败或超时。已完成结果保留；分析请求可能已计费，请手动决定是否重试。');
+    throw new AIError(body ? 'DeepSeek 请求中断或超时。已完成结果保留，此次请求可能已计费，请手动决定是否重试。' : '暂时无法连接 DeepSeek，请检查网络后重试。');
   } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
 }
 /** A task holds this binding across every chapter, including a reading-progress wait. */
-export async function createBoundAnalysisSession(invalidate: () => void) {
-  const context = await requestContext(true);
+export function createBoundAnalysisSession(invalidate: () => void) {
+  const context = requestContext();
   const changed = () => { context.invalid = true; invalidate(); };
-  const stop = subscribeAuth(session => { if (session?.user.id !== context.userId) changed(); });
-  const keyChanged = () => { if (context.epoch !== keyEpoch) changed(); };
-  if (typeof window !== 'undefined') {
-    window.addEventListener('onr-cloud-config-changed', changed);
-    window.addEventListener('onr-ai-key-changed', keyChanged);
-  }
+  const localChanged = () => { if (contextChanged(context)) changed(); };
+  const events = ['storage', 'onr-local-cloud-account-changed', 'onr-cloud-config-changed', 'onr-ai-key-changed'];
+  if (typeof window !== 'undefined') for (const event of events) window.addEventListener(event, localChanged);
   return {
-    principal: { projectUrl: context.config.url, userId: context.userId },
-    assert: () => assertContext(context), check: () => currentSession(context),
-    request: (body: { action: string; [key: string]: unknown }, signal?: AbortSignal) => callProxy(body, signal, context),
-    close: () => { stop(); if (typeof window !== 'undefined') { window.removeEventListener('onr-cloud-config-changed', changed); window.removeEventListener('onr-ai-key-changed', keyChanged); } },
+    principal: context.principal,
+    assert: () => assertContext(context),
+    request: (request: GenerationRequest, signal?: AbortSignal) => callDeepSeek(context, generationBody(request), signal),
+    close: () => { if (typeof window !== 'undefined') for (const event of events) window.removeEventListener(event, localChanged); },
   };
 }
-export interface AIProxyStatus { ready: true; upstreamChecked: false; models: string[]; limits: { maxTokens: number; maxRequestCostUsd: number } }
-/** Authenticated deployment check: no key is sent and DeepSeek is not contacted. */
-export async function checkAIProxy(): Promise<AIProxyStatus> {
-  const value = await callProxy({ action: 'status' }) as Partial<AIProxyStatus>;
-  if (value?.ready !== true || value.upstreamChecked !== false || !Array.isArray(value.models) || !value.models.length || value.models.some(m => !AI_MODELS.some(known => known.id === m)) || value.limits?.maxTokens !== OUTPUT_LIMIT || value.limits.maxRequestCostUsd !== MAX_AI_REQUEST_COST_USD) throw new AIError('代理状态响应无效或版本不兼容，请检查部署。');
-  return value as AIProxyStatus;
+/** Local capability check does not use the network or require a key. */
+export function getAIReadiness() {
+  return { ready: true, upstreamChecked: false, models: AI_MODELS.map(model => model.id), protocols: supportedProtocols,
+    limits: { maxTokens: OUTPUT_LIMIT, maxRequestCostUsd: MAX_AI_REQUEST_COST_USD } };
 }
-/** Uses GET /models through the fixed proxy; does not generate tokens. Call only on user click. */
+/** GET /models is read-only. Call only on user click. */
 export async function testAIConnection(): Promise<string[]> {
-  const response = await callProxy({ action: 'models' }) as { data?: { id: string }[] };
-  if (!Array.isArray(response.data)) throw new AIError('模型列表响应无效。');
-  return response.data.map(m => m.id).filter(id => typeof id === 'string');
+  const response = await callDeepSeek(requestContext()) as { data?: { id: string }[] } | null;
+  if (!Array.isArray(response?.data)) throw new AIError('模型列表响应无效。');
+  const models = AI_MODELS.filter(model => response.data!.some(item => item?.id === model.id)).map(model => model.id);
+  if (!models.length) throw new AIError('连接已建立，但此 Key 暂时无法使用阅见支持的模型。');
+  return models;
 }
 function normalizedName(name: string) { return name.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase(); }
 async function stableCharacterId(bookId: string, name: string) {
@@ -342,14 +384,14 @@ export interface DeepChunkOptions {
   review?: boolean;
   commit?: () => Promise<void>;
 }
-export async function saveAnalysisChunk(chapter: Chapter, candidates: DialogueCandidate[], rows: ModelAttribution[], model: AIModel, checkpoint: AnalysisJob | undefined, assertLive: () => void, deep?: DeepChunkOptions) {
+export async function saveAnalysisChunk(chapter: Chapter, candidates: DialogueCandidate[], rows: ModelAttribution[], model: AIModel, checkpoint: AnalysisJob | undefined, assertLive: () => void | Promise<void>, deep?: DeepChunkOptions) {
   // WebCrypto is completed before the IndexedDB transaction to keep it active.
   const ids = new Map(await Promise.all([...new Set(rows.flatMap(r => r.speaker ? [r.speaker] : []))].map(async name => {
     const first = candidates.find(c => rows.find(row => row.id === c.id)?.speaker === name)!;
     return [name, await stableCharacterId(chapter.bookId, deep ? `${name}:${chapter.id}:${first.paragraphIndex}:${first.start}` : name)] as const;
   })));
   await db.transaction('rw', [db.books, db.chapters, db.characters, db.dialogues, db.corrections, db.jobs, db.settings], async () => {
-    assertLive();
+    await assertLive();
     const book = await db.books.get(chapter.bookId);
     const currentChapter = await db.chapters.get(chapter.id);
     if (!book || book.deletedAt || !currentChapter || JSON.stringify(currentChapter.paragraphs) !== JSON.stringify((deep?.sourceChapter || chapter).paragraphs)) throw new AIError('书籍或章节已变化，当前片段未保存。');
@@ -404,7 +446,7 @@ export async function saveAnalysisChunk(chapter: Chapter, candidates: DialogueCa
       };
       await db.dialogues.put(dialogue);
     }
-    assertLive();
+    await assertLive();
     // A chunk and its paid-work checkpoint commit together, including manual overrides.
     if (checkpoint) await db.jobs.put(checkpoint);
     if (deep?.commit) await deep.commit();
@@ -449,18 +491,20 @@ export function analyzeChapter(options: AnalysisOptions): AnalysisController {
     if (!hasAIKey()) throw new AIError('请先输入 API Key。');
     if (!Number.isFinite(options.budgetUsd) || options.budgetUsd <= 0 || options.budgetUsd > 10) throw new AIError('单次预算必须在 $0–$10 之间。');
     modelInfo(options.model);
-    const context = await requestContext(true);
-    const stopAuth = subscribeAuth(session => {
-      if (session?.user.id !== context.userId) { context.invalid = true; controller.cancel(); }
-    });
-    const changedConfig = () => { context.invalid = true; controller.cancel(); };
-    if (typeof window !== 'undefined') window.addEventListener('onr-cloud-config-changed', changedConfig);
-    const assertWork = () => { assertContext(context); if (cancelled) throw new AIError('任务已取消。'); };
+    const session = createBoundAnalysisSession(() => controller.cancel());
+    const assertWork = () => { session.assert(); if (cancelled) throw new AIError('任务已取消。'); };
     try {
       const chapter = await db.chapters.get(options.chapterId);
       if (!chapter || chapter.bookId !== options.bookId) throw new AIError('章节不存在。');
       const book = await db.books.get(options.bookId);
       if (!book || book.deletedAt) throw new AIError('书籍不存在或已移除。');
+      const { projectUrl, userId } = session.principal;
+      const initialOwner = await analysisBookOwner(book.id, projectUrl);
+      if (initialOwner && initialOwner !== bookAccountScope(projectUrl, userId)) throw new AIError('此书属于另一账号。请返回原账号，或在本机明确重新导入后分析。');
+      const checkOwner = async () => {
+        if (await analysisBookOwner(book.id, projectUrl) !== initialOwner) throw new AIError('书籍所属账号已变化，本次分析停止。');
+        session.assert();
+      };
       const chunks = chunksFor(chapter);
       const estimate = estimateAnalysis(chapter, options.model);
       const id = options.jobId || crypto.randomUUID();
@@ -477,8 +521,8 @@ export function analyzeChapter(options: AnalysisOptions): AnalysisController {
       const announce = () => { try { options.onProgress?.({ ...job }); } catch { /* A view callback must not change paid-work persistence. */ } };
       const update = async (changes: Partial<AnalysisJob>) => {
         const next = { ...job, ...changes, updatedAt: Date.now() };
-        await db.transaction('rw', [db.books, db.chapters, db.jobs], async () => {
-          assertContext(context);
+        await db.transaction('rw', [db.books, db.chapters, db.jobs, db.settings], async () => {
+          await checkOwner();
           const currentBook = await db.books.get(chapter.bookId);
           const currentChapter = await db.chapters.get(chapter.id);
           if (!currentBook || currentBook.deletedAt || !currentChapter) throw new AIError('书籍已移除，任务已停止。');
@@ -506,38 +550,36 @@ export function analyzeChapter(options: AnalysisOptions): AnalysisController {
           if (cancelled) break;
           assertWork();
           const reservation = chunkCost(chapter, chunks[i], options.model, known).usd;
-          if (reservation > MAX_AI_REQUEST_COST_USD) throw new AIError('当前片段超出代理单次费用限制，未发送请求。');
+          if (reservation > MAX_AI_REQUEST_COST_USD) throw new AIError('当前片段超出单次费用限制，未发送请求。');
           // Reserve before sending. Even a timeout may be billed, so never reclaim this reservation automatically.
           const totalReserved = await reserveAnalysisBudget(id, signature, reservation, options.budgetUsd);
           abort = new AbortController();
           await update({ status: 'running', reservedUsd: totalReserved });
           assertWork();
           const input = payloadFor(chapter, chunks[i], known);
-          const result = await callProxy({ action: 'analyze', authorized: true, model: options.model, maxTokens: OUTPUT_LIMIT,
-            system: SYSTEM_PROMPT, input, maxCostUsd: reservation }, abort.signal, context) as { choices?: { finish_reason: string; message: { content: string } }[] };
+          const result = await session.request({ action: 'analyze', authorized: true, model: options.model, maxTokens: OUTPUT_LIMIT,
+            system: SYSTEM_PROMPT, input, maxCostUsd: reservation }, abort.signal) as { choices?: { finish_reason: string; message: { content: string } }[] };
           assertWork();
-          const choice = result.choices?.[0];
+          const choice = result?.choices?.[0];
           if (!choice || choice.finish_reason !== 'stop') throw new AIError('AI 输出不完整；已完成片段保留，可手动重试剩余内容。');
           let data: unknown;
           try { data = JSON.parse(choice.message.content); } catch { throw new AIError('AI 返回的 JSON 无法解析；本地阅读不受影响。'); }
-          await currentSession(context);
           assertWork();
           const next = { ...job, completedChunks: i + 1, updatedAt: Date.now() };
-          await saveAnalysisChunk(chapter, chunks[i], validateAttributions(data, chunks[i], input), options.model, next, assertWork);
+          await saveAnalysisChunk(chapter, chunks[i], validateAttributions(data, chunks[i], input), options.model, next, async () => { await checkOwner(); assertWork(); });
           job = next; announce();
         }
         await update({ status: cancelled ? 'cancelled' : 'done' });
         return job;
       } catch (error) {
         const safeError = error instanceof AIError ? error.message : '分析或本地保存失败。已完成片段保留；费用可能已产生，请手动决定是否重试。';
-        if (context.invalid) { job = { ...job, status: 'cancelled', error: '账号、代理或会话密钥已变化，原任务已停止。' }; announce(); return job; }
+        try { session.assert(); } catch { job = { ...job, status: 'cancelled', error: '本机书库账号或会话密钥已变化，原任务已停止。' }; announce(); return job; }
         try { await update(cancelled ? { status: 'cancelled' } : { status: 'failed', error: safeError }); }
         catch { job = { ...job, status: cancelled ? 'cancelled' : 'failed', error: safeError }; announce(); }
         return job;
       }
     } finally {
-      stopAuth();
-      if (typeof window !== 'undefined') window.removeEventListener('onr-cloud-config-changed', changedConfig);
+      session.close();
     }
   };
   controller.done = (async () => {

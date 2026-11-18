@@ -3,24 +3,26 @@ import { webcrypto } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { db } from '../core/db';
 import type { AnalysisJob, Book, Chapter } from '../types';
-import { analyzeChapter, checkAIProxy, clearAIKey, correctDialogue, createCharacter, extractDialogues, setAIKey } from './ai';
+import { analyzeChapter, getAIReadiness, clearAIKey, correctDialogue, createCharacter, extractDialogues, setAIKey, testAIConnection } from './ai';
 
 const cloud = vi.hoisted(() => ({
-  user: 'account-a',
   config: { url: 'https://reader-cloud.example', anonKey: 'sb_publishable_fixture' },
-  listeners: new Set<(session: { user: { id: string } } | null) => void>(),
   session: vi.fn(),
 }));
 vi.mock('./cloud', () => ({
   getCloudConfig: () => cloud.config,
   getSession: () => cloud.session(),
-  subscribeAuth: (callback: (session: { user: { id: string } } | null) => void) => { cloud.listeners.add(callback); return () => cloud.listeners.delete(callback); },
 }));
 
 const book: Book = { id: 'ai-fixture-book', title: 'AI fixture', author: '', format: 'txt', language: 'zh', coverColor: '#123456', fingerprint: 'fixture', totalWords: 100, chapterCount: 1, createdAt: 1, updatedAt: 1, cloudEnabled: false };
 const chapter: Chapter = { id: 'ai-fixture-chapter', bookId: book.id, index: 0, title: '第一章', paragraphs: ['林青说：“我们走吧。”', '阿明说：“我留下。”'] };
 const options = { bookId: book.id, chapterId: chapter.id, model: 'deepseek-flash' as const, budgetUsd: 0.1, authorized: true as const };
-interface SentBody { action: string; apiKey?: string; input: { dialogues: { id: string; text: string }[] }; maxCostUsd?: number }
+interface SentBody { input: { dialogues: { id: string; text: string }[] } }
+const localSessionKey = 'onr.auth.reader-cloud.example';
+function readBody(init?: RequestInit): SentBody {
+  const body = JSON.parse(String(init?.body));
+  return { input: JSON.parse(body.messages[1].content) };
+}
 function reply(body: SentBody, speaker = '林青') {
   return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ dialogues: body.input.dialogues.map(d => ({ id: d.id, speaker, confidence: 0.95 })) }) } }] });
 }
@@ -34,14 +36,13 @@ async function fixture(paragraphs = chapter.paragraphs) {
   await db.chapters.put({ ...chapter, paragraphs });
 }
 beforeEach(() => {
-  cloud.user = 'account-a'; cloud.config = { url: 'https://reader-cloud.example', anonKey: 'sb_publishable_fixture' };
-  cloud.listeners.clear(); cloud.session.mockReset();
-  cloud.session.mockImplementation(async () => ({ user: { id: cloud.user }, access_token: 'fixture-session-only' }));
+  localStorage.removeItem(localSessionKey); cloud.session.mockClear();
   vi.stubGlobal('crypto', webcrypto);
   vi.stubGlobal('fetch', vi.fn(() => { throw new Error('Unmocked network access is prohibited.'); }));
   setAIKey('fixture-key-not-a-provider-credential');
 });
 afterEach(async () => {
+  localStorage.removeItem(localSessionKey);
   clearAIKey(); vi.restoreAllMocks();
   await db.transaction('rw', [db.books, db.chapters, db.characters, db.dialogues, db.corrections, db.jobs, db.settings], async () => {
     await Promise.all([db.books.clear(), db.chapters.clear(), db.characters.clear(), db.dialogues.clear(), db.corrections.clear(), db.jobs.clear(), db.settings.clear()]);
@@ -52,8 +53,11 @@ afterEach(async () => {
 describe('offline chapter analysis workflow', () => {
   it('saves attributable speakers and marks an unsupported invented name as unknown', async () => {
     await fixture();
-    vi.mocked(fetch).mockImplementation(async (_url, init) => {
-      const body = JSON.parse(String(init?.body)) as SentBody;
+    vi.mocked(fetch).mockImplementation(async (url, init) => {
+      expect(url).toBe('https://api.deepseek.com/chat/completions');
+      expect(init).toMatchObject({ method: 'POST', credentials: 'omit', redirect: 'error', cache: 'no-store', headers: { Authorization: 'Bearer fixture-key-not-a-provider-credential' } });
+      expect(init?.body).not.toContain('fixture-key'); expect(init?.body).not.toContain('fixture-session');
+      const body = readBody(init);
       return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ dialogues: [
         { id: body.input.dialogues[0].id, speaker: '林青', confidence: 0.99 },
         { id: body.input.dialogues[1].id, speaker: '并不存在的人物', confidence: 0.99 },
@@ -66,6 +70,7 @@ describe('offline chapter analysis workflow', () => {
     expect(dialogues[0].characterId).toBeTruthy(); expect(dialogues[1].characterId).toBeNull();
     expect((await db.characters.toArray()).map(c => c.name)).toEqual(['林青']);
     expect(await db.jobs.get(job.id)).toMatchObject({ status: 'done', completedChunks: 1 });
+    expect(cloud.session).not.toHaveBeenCalled();
     expect(JSON.stringify([await db.jobs.toArray(), await db.settings.toArray()])).not.toContain('fixture-key-not-a-provider-credential');
   });
 
@@ -76,7 +81,7 @@ describe('offline chapter analysis workflow', () => {
     await db.dialogues.put({ ...candidate, bookId: book.id, chapterId: chapter.id, characterId: null, confidence: 0, source: 'ai', updatedAt: 1 });
     const started = deferred<void>(); const response = deferred<Response>();
     let body!: SentBody;
-    vi.mocked(fetch).mockImplementation(async (_url, init) => { body = JSON.parse(String(init?.body)); started.resolve(); return response.promise; });
+    vi.mocked(fetch).mockImplementation(async (_url, init) => { body = readBody(init); started.resolve(); return response.promise; });
     const task = analyzeChapter(options); await started.promise;
     await correctDialogue(candidate.id, manual.id);
     response.resolve(reply(body, '阿明'));
@@ -89,7 +94,7 @@ describe('offline chapter analysis workflow', () => {
     await fixture(Array.from({ length: 25 }, (_, i) => `林青说：“这是第${i + 1}句。”`));
     const sent: SentBody[] = [];
     vi.mocked(fetch).mockImplementation(async (_url, init) => {
-      const body = JSON.parse(String(init?.body)) as SentBody; sent.push(body);
+      const body = readBody(init); sent.push(body);
       if (sent.length === 2) throw new Error('Untrusted network error with fixture-key-not-a-provider-credential');
       return reply(body);
     });
@@ -108,7 +113,7 @@ describe('offline chapter analysis workflow', () => {
   });
 
   it('rolls back the whole chunk if its checkpoint cannot be committed', async () => {
-    await fixture(); vi.mocked(fetch).mockImplementation(async (_url, init) => reply(JSON.parse(String(init?.body))));
+    await fixture(); vi.mocked(fetch).mockImplementation(async (_url, init) => reply(readBody(init)));
     const put = db.jobs.put.bind(db.jobs);
     vi.spyOn(db.jobs, 'put').mockImplementation((job: AnalysisJob) => {
       if (job.status === 'running' && job.completedChunks === 1) throw new Error('Simulated local disk failure');
@@ -123,7 +128,7 @@ describe('offline chapter analysis workflow', () => {
   it('rejects duplicate candidate IDs without saving an ambiguous chunk', async () => {
     await fixture();
     vi.mocked(fetch).mockImplementation(async (_url, init) => {
-      const body = JSON.parse(String(init?.body)) as SentBody;
+      const body = readBody(init);
       const row = { id: body.input.dialogues[0].id, speaker: '林青', confidence: 1 };
       return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ dialogues: [row, row] }) } }] });
     });
@@ -133,7 +138,7 @@ describe('offline chapter analysis workflow', () => {
 
   it('does not lose an immediate resume while persisting its pause checkpoint', async () => {
     await fixture(Array.from({ length: 13 }, (_, i) => `林青说：“这是第${i}句。”`));
-    vi.mocked(fetch).mockImplementation(async (_url, init) => reply(JSON.parse(String(init?.body))));
+    vi.mocked(fetch).mockImplementation(async (_url, init) => reply(readBody(init)));
     let didPause = false; let task!: ReturnType<typeof analyzeChapter>;
     task = analyzeChapter({ ...options, onProgress(job) {
       if (job.completedChunks === 1 && !didPause) { didPause = true; task.pause(); }
@@ -144,36 +149,49 @@ describe('offline chapter analysis workflow', () => {
 });
 
 describe('AI session and deployment boundaries', () => {
-  it('checks the authenticated proxy without a key or model-generation request', async () => {
+  it('checks local readiness without a key or a network request', () => {
     clearAIKey();
-    vi.mocked(fetch).mockResolvedValue(Response.json({ ready: true, upstreamChecked: false, models: ['deepseek-flash'], limits: { maxTokens: 4096, maxRequestCostUsd: 0.1 } }));
-    expect(await checkAIProxy()).toMatchObject({ ready: true, upstreamChecked: false });
-    const [, init] = vi.mocked(fetch).mock.calls[0];
-    expect(JSON.parse(String(init?.body))).toEqual({ action: 'status' });
+    expect(getAIReadiness()).toMatchObject({ ready: true, upstreamChecked: false, protocols: ['identity-v1', 'plot-v1', 'story-identity-v1'] });
+    expect(fetch).not.toHaveBeenCalled(); expect(cloud.session).not.toHaveBeenCalled();
+  });
+
+  it('queries only the official models endpoint and ignores oversized responses without echoing them', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(Response.json({ data: [{ id: 'deepseek-flash' }, { id: 'ignored-unavailable-model' }] }));
+    expect(await testAIConnection()).toEqual(['deepseek-flash']);
+    expect(fetch).toHaveBeenCalledExactlyOnceWith('https://api.deepseek.com/models', expect.objectContaining({
+      method: 'GET', redirect: 'error', credentials: 'omit', cache: 'no-store', body: undefined,
+    }));
+    vi.mocked(fetch).mockResolvedValueOnce(new Response('FAIL'.repeat(33000)));
+    await expect(testAIConnection()).rejects.toThrow('内容过大或格式无效');
   });
 
   it('stops an account-switch response even when the transport ignores cancellation', async () => {
     await fixture(); const started = deferred<void>(); const response = deferred<Response>(); let body!: SentBody;
-    vi.mocked(fetch).mockImplementation(async (_url, init) => { body = JSON.parse(String(init?.body)); started.resolve(); return response.promise; });
+    localStorage.setItem(localSessionKey, JSON.stringify({ user: { id: 'account-a' } }));
+    vi.mocked(fetch).mockImplementation(async (_url, init) => { body = readBody(init); started.resolve(); return response.promise; });
     const task = analyzeChapter(options); await started.promise;
-    cloud.user = 'account-b'; for (const notify of cloud.listeners) notify({ user: { id: cloud.user } });
+    localStorage.setItem(localSessionKey, JSON.stringify({ user: { id: 'account-b' } }));
+    window.dispatchEvent(new Event('onr-local-cloud-account-changed'));
     response.resolve(reply(body));
     expect((await task.done).status).toBe('cancelled'); expect(await db.dialogues.count()).toBe(0); expect(await db.characters.count()).toBe(0);
     expect((await db.jobs.toArray())[0].status).toBe('running');
   });
 
-  it('never substitutes a newly loaded key during an awaited session lookup', async () => {
-    await fixture(); const lookup = deferred<{ user: { id: string }; access_token: string }>();
-    cloud.session.mockImplementationOnce(() => lookup.promise);
+  it('never substitutes a newly loaded key during local book lookup', async () => {
+    await fixture();
+    const lookup = deferred<Chapter>();
+    const started = deferred<void>();
+    vi.spyOn(db.chapters, 'get').mockImplementationOnce(() => { started.resolve(); return lookup.promise; });
     const task = analyzeChapter(options);
+    await started.promise;
     setAIKey('another-fixture-key-not-a-provider-credential');
-    lookup.resolve({ user: { id: 'account-a' }, access_token: 'fixture-session-only' });
+    lookup.resolve(chapter);
     await expect(task.done).rejects.toThrow('变化'); expect(fetch).not.toHaveBeenCalled(); expect(await db.dialogues.count()).toBe(0);
   });
 
   it('rejects simultaneous work for the same chapter before a second request', async () => {
     await fixture(); const started = deferred<void>(); const response = deferred<Response>(); let body!: SentBody;
-    vi.mocked(fetch).mockImplementation(async (_url, init) => { body = JSON.parse(String(init?.body)); started.resolve(); return response.promise; });
+    vi.mocked(fetch).mockImplementation(async (_url, init) => { body = readBody(init); started.resolve(); return response.promise; });
     const task = analyzeChapter(options); await started.promise;
     await expect(analyzeChapter(options).done).rejects.toThrow('已有');
     task.cancel(); response.resolve(reply(body));

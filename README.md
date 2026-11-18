@@ -2,22 +2,20 @@
 
 免费、开源、Local-first 的跨平台小说阅读器。React + TypeScript + Vite PWA，共享 Tauri 2 桌面与移动端外壳。AGPL-3.0-only。
 
-**立即阅读：[打开公开 Web / PWA](https://asahi12-26.github.io/open-novel-reader/)**。导入自己的 TXT / EPUB 即可离线阅读，无需注册。云同步已连接本人测试项目；AI 为可选功能，使用自己的会话密钥并逐次授权。
+导入 TXT 或无 DRM 的 EPUB 即可开始本地阅读。AI 使用你自己的 DeepSeek API Key。开发者私人云通过服务端白名单授权。 [打开 Web / PWA](https://asahi12-26.github.io/open-novel-reader/)
 
 ## 当前版本与下载
 
-**V0.6.0-beta.1** 加入书籍系列、跨书人物关联、剧情证据和已读章节简介。新版整书任务先保存剧情理解，再识别对白。Android versionCode 为 6001。 [V0.6 使用与离线质量对照](docs/V06_STORY_MEMORY.md)
-
-当前使用 Supabase 内置团队测试邮件，正式公网注册和完整密码找回暂不开放。已有测试账号可在三个平台登录；自建与配置步骤见 [云服务配置](docs/CLOUD_SETUP.md)。
+**V0.6.1-beta.1** 默认使用本地书库，加入 ZIP 备份恢复和独立 DeepSeek 直连。Android versionCode 为 6011。 [新版安装、备份与 AI 指南](docs/V061_LOCAL_FIRST.md)
 
 | 平台 | 本轮状态 | 使用入口 |
 | --- | --- | --- |
 | Web / PWA | 在线版 | [在线使用](https://asahi12-26.github.io/open-novel-reader/) |
-| Windows x64 | 安装包未配置发布者签名 | [下载 EXE](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.6.0-beta.1/Open-Novel-Reader_0.6.0-beta.1_windows-x64-setup.exe) |
-| Android ARM64 | 复用固定发布证书 | [下载 APK](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.6.0-beta.1/Open-Novel-Reader_0.6.0-beta.1_android-arm64.apk) |
+| Windows x64 | 安装包未配置发布者签名 | [下载 EXE](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.6.1-beta.1/Open-Novel-Reader_0.6.1-beta.1_windows-x64-setup.exe) |
+| Android ARM64 | 复用固定发布证书 | [下载 APK](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.6.1-beta.1/Open-Novel-Reader_0.6.1-beta.1_android-arm64.apk) |
 | iOS | 保留共享架构，尚无 IPA 构建 | 需要 macOS 和签名条件 |
 
-发布附件含校验文件和第三方许可。Android 0.2 起沿用固定发布证书，可覆盖安装。仍在使用 Android 0.1 开发签名版的用户，先在旧版导出书库，再安装新版并恢复。 [使用指南](docs/USAGE.md) · [V0.6 Beta 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.6.0-beta.1)
+发布附件含校验文件和第三方许可。Android 0.2 起沿用固定发布证书，可覆盖安装。仍在使用 Android 0.1 开发签名版的用户，先在旧版导出书库，再安装新版并恢复。 [使用指南](docs/USAGE.md) · [V0.6.1 Beta 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.6.1-beta.1)
 
 ## 现在可以用什么
 
@@ -25,12 +23,12 @@
 - 动态书海首页：统一相位波浪、距离衰减涟漪、悬停 / 键盘浮起、封面共享展开与反向返回。手机单击进入，支持浅色 / 暖色 / 深色与减少动态效果。
 - 段落及字符锚点续读、字号 / 字体 / 行距 / 页宽、目录、书签、离线 PWA、备份导出与验证恢复。
 - 书名 / 作者 / 封面编辑、分类、搜索、排序、最近阅读、逐本云端上传选择。
-- Supabase 邮箱确认 / 登录、逐书上传、原文件 / 书架 / 进度 / 书签 / 设置同步、断网恢复与账号隔离；本人测试项目已部署，也支持自己的云服务。
-- DeepSeek 逐章选择、对白识别、人物归属和结果保存流程；预算估计、每次授权、分片暂停 / 取消 / 断点重试、未知人物、人工纠正、人物新建 / 改名 / 合并。代理已部署，原创短文真实推理及人工确认保存通过，复杂人物质量仍待扩展验证。
+- 开发者私人云按 Auth UID 授权，支持逐书云同步、版本冲突处理及离线恢复。自建维护者可配置自己的项目。
+- DeepSeek 使用读者的会话 Key 直连，支持逐章和整书、预算估算、分片暂停 / 取消 / 续跑、人物及剧情证据、人工纠正。
 - 整书分析支持已读范围和全书范围。任务与预算保存在本机，重启后重新授权即可从检查点继续。阅读页默认隐藏未来身份，人工纠错始终优先。V0.4 的真实整书模型质量待独立评估。 [质量样本与验证](docs/AI_QUALITY.md)
 - 阅读页「人物管理」可上传及裁剪本地头像，查看别名、出场位置、身份历史和相关对白。 [人物头像使用指南](docs/CHARACTER_AVATARS.md)
 
-原创短章 Flash 真实推理最小验证通过：完成 1/1 分片，3 句对白全部归属到 2 名人物，0 未知，1 处人工确认重新打开后仍保存。测试结束已清除会话内存密钥；整本书与复杂人物的识别准确率仍待扩展验证，后续收费调用需另行授权。 正式 SMTP 与 Leaked Password Protection 留待开放公网注册前配置；后者当前仅 Pro 及以上套餐支持，本项目保持免费套餐。EPUB 当前按文本阅读，暂不呈现插图、富文本强调或出版商 CSS；不支持 DRM、漫画和固定版式 EPUB。
+EPUB 当前按文本阅读，暂不呈现插图、富文本强调或出版商 CSS；不支持 DRM、漫画和固定版式 EPUB。 [历史验收记录](PROJECT_STATUS.md)
 
 ## 本地运行
 
@@ -53,11 +51,11 @@ Web 生产版通过 service worker 缓存应用，首次联网缓存后可离线
 
 ## 云同步与 AI
 
-复制 `.env.example` 为 `.env.local`，或在应用「设置与云同步」中填写 Supabase URL 和 anon / publishable 公钥。应用拒绝 service-role 密钥。执行迁移、部署 `deepseek-proxy`，参见 [同步与 AI 部署](docs/SYNC_AI.md)。未配置时本地阅读完整可用。
+本地模式无需配置 Supabase。私人云自建维护者可使用 `.env.example` 或设置页配置 HTTPS 项目 URL 和 anon / publishable 公钥，然后应用迁移并登记可信 UID。 [私人云部署](docs/CLOUD_SETUP.md)
 
 只会上传用户逐本选择的小说。退出账号不删除本机书库；同一台设备供多人使用时，请使用各自独立的浏览器配置或系统账号。
 
-DeepSeek Key **仅保存在本次会话内存**。Web 与原生版经 Supabase Edge Function 转发，刷新、退出或切换账号后需重新输入。「检查代理」无需密钥且不访问 DeepSeek，「测试连接」只查询模型。收费分析须选择单章或整书范围、确认预算并点击授权启动。失败或取消的请求可能计费，软件保留已预留额度，重试须重新授权。预算根据公开价格估算。 [整书分析指南](docs/BOOK_ANALYSIS.md)
+Windows、Android 与 Web 使用自己的 DeepSeek API Key 直接连接服务商，Key 仅保存在当前会话内存。测试连接只查询模型。选择分析范围、确认预算并明确授权后才发送需要的小说片段。失败、取消和重试沿用既有预算记录。 [整书分析指南](docs/BOOK_ANALYSIS.md)
 
 ## 构建与发布
 

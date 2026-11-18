@@ -11,10 +11,10 @@ const statusLabels: Record<AnalysisJob['status'], string> = {
   queued: '准备中', running: '正在阅读与识别', paused: '已暂停', done: '识别完成', failed: '分析失败', cancelled: '已取消',
 };
 
-export default function AnalysisPanel({ chapter, scope, getCharacter, showAll = false, blockedByBookTask = false, onOpenBookAnalysis, onClose, onViewResults }: {
+export default function AnalysisPanel({ chapter, scope, getCharacter, showAll = false, blockedByBookTask = false, onConfigureAI, onOpenBookAnalysis, onClose, onViewResults }: {
   chapter: Chapter; scope: IdentityScope; getCharacter: (id: string | null) => Character | undefined; showAll?: boolean; onOpenBookAnalysis?: () => void;
   blockedByBookTask?: boolean;
-  onClose: () => void; onViewResults?: (chapter: Chapter) => void;
+  onConfigureAI: () => void; onClose: () => void; onViewResults?: (chapter: Chapter) => void;
 }) {
   const [chapterId, setChapterId] = useState(chapter.id);
   const chapters = useQuery(() => db.chapters.where('bookId').equals(chapter.bookId).sortBy('index'), [chapter.bookId], [chapter]);
@@ -96,8 +96,9 @@ export default function AnalysisPanel({ chapter, scope, getCharacter, showAll = 
       <small>输入上限约 {estimate.inputTokensUpperBound.toLocaleString()} token，输出上限 {estimate.outputTokensUpperBound.toLocaleString()} token。按公开峰值价格预留，实际账单以 DeepSeek 为准，失败或取消也可能计费。</small>
     </div>
     <label className="form-label">本次任务累计费用额度（美元）<input type="number" min="0.001" max="10" step="0.01" value={budget} disabled={working} onChange={event => { setBudget(event.target.value); setAuthorized(false); }}/></label>
-    {!keyReady && <p className="inline-warning">请先回到书架 → 设置 → AI 模型，登录并载入本次会话密钥。载入密钥不会自动分析。</p>}
-    <label className="checkbox-row authorization"><input type="checkbox" checked={authorized} disabled={working} onChange={event => setAuthorized(event.target.checked)}/>我同意将所选章节的对白、邻近上下文及已有人物名称发送至代理和 DeepSeek，并授权在上述累计额度内进行本次付费分析或继续任务。</label>
+    {!keyReady && <div className="ai-setup-jump"><p className="inline-warning">请载入自己的 DeepSeek API Key。载入密钥后仍需授权任务。</p>
+      <button className="secondary" type="button" disabled={working} onClick={onConfigureAI}>打开 AI 配置</button></div>}
+    <label className="checkbox-row authorization"><input type="checkbox" checked={authorized} disabled={working} onChange={event => setAuthorized(event.target.checked)}/>我同意将所选章节的对白、邻近上下文及已有人物名称发送给 DeepSeek，并授权在上述累计额度内进行本次付费分析或继续任务。</label>
     {error && <p className="inline-error" role="alert">{error}</p>}
     {job && <div className="job-status" role="status" aria-live="polite">
       <div><span>{!working && ['running', 'queued', 'paused'].includes(job.status) ? '上次任务已中断，可重新授权后继续' : statusLabels[job.status]}</span><strong>{job.completedChunks} / {job.totalChunks}</strong></div>

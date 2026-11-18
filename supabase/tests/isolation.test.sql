@@ -4,6 +4,8 @@ select plan(8);
 insert into auth.users(id, email) values
   ('00000000-0000-0000-0000-000000000001', 'reader-a@example.invalid'),
   ('00000000-0000-0000-0000-000000000002', 'reader-b@example.invalid');
+insert into reader_private.cloud_members(user_id) values
+  ('00000000-0000-0000-0000-000000000001'), ('00000000-0000-0000-0000-000000000002');
 set local role authenticated;
 set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001","role":"authenticated"}';
 select is(public.save_reader_record('book-a', '{"schema":1,"book":{"id":"book-a"}}', 0), 1::bigint, 'owner can create book');

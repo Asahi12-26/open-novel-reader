@@ -14,7 +14,10 @@ const encoder = new TextEncoder();
 const MAX_BODY_BYTES = 160000;
 const MAX_INPUT_BYTES = 100000;
 const MAX_RESPONSE_BYTES = 131072;
+const MAX_PENDING_PER_ISOLATE = 24;
 type JsonObject = Record<string, unknown>;
+type ProxyAction = 'status' | 'models' | 'analyze';
+export type ProxyAdmission = 'ALLOWED' | 'REQUEST_IN_PROGRESS' | 'RATE_LIMITED' | 'PROJECT_LIMIT' | 'PROJECT_BUSY';
 type IdentityInput = {
   known: { id: string }[];
   context: { paragraph: number; start: number; text: string }[];
@@ -23,6 +26,8 @@ type IdentityInput = {
 export interface ProxyDependencies {
   /** Return a verified non-anonymous user id, never decoded-but-unverified JWT claims. */
   authenticate(token: string, signal: AbortSignal): Promise<string | null>;
+  reserve(userId: string, action: ProxyAction, requestId: string, signal: AbortSignal): Promise<ProxyAdmission>;
+  release(userId: string, requestId: string): Promise<void>;
   fetch: typeof fetch;
   allowedOrigins?: readonly string[];
   timeoutMs?: number;
@@ -101,7 +106,8 @@ function validIdentityOutput(parsed: unknown, input?: IdentityInput, story?: Sto
 /** No provider calls happen on OPTIONS/status/failed validation. No retries or secret logging. */
 export function createDeepseekProxy(deps: ProxyDependencies): (request: Request) => Promise<Response> {
   const allowedOrigins = new Set(deps.allowedOrigins || DEFAULT_AI_ORIGINS);
-  // A warm-isolate concurrency fence complements client reservations; it is not a global quota.
+  let pending = 0;
+  // Reject overlaps locally before making the durable cross-isolate admission check.
   const activeUsers = new Set<string>();
   return async req => {
     const origin = req.headers.get('origin');
@@ -116,6 +122,8 @@ export function createDeepseekProxy(deps: ProxyDependencies): (request: Request)
     if (!/^application\/json(?:\s*;|$)/i.test(req.headers.get('content-type') || '')) return reply({ error: 'JSON_REQUIRED' }, 415);
     const auth = req.headers.get('authorization') || '';
     if (!/^Bearer [^\s]+$/i.test(auth) || auth.length > 8192) return reply({ error: 'AUTH_REQUIRED' }, 401);
+    if (pending >= MAX_PENDING_PER_ISOLATE) return reply({ error: 'PROJECT_BUSY' }, 429);
+    pending++;
     const controller = new AbortController();
     const cancel = () => controller.abort();
     req.signal.addEventListener('abort', cancel, { once: true });
@@ -123,6 +131,7 @@ export function createDeepseekProxy(deps: ProxyDependencies): (request: Request)
     const timer = setTimeout(cancel, deps.timeoutMs ?? 110000);
     let body: JsonObject | undefined;
     let activeUser: string | undefined;
+    let providerLease: { userId: string; requestId: string } | undefined;
     try {
       let userId: string | null;
       try { userId = await deps.authenticate(auth.slice(7), controller.signal); }
@@ -136,9 +145,22 @@ export function createDeepseekProxy(deps: ProxyDependencies): (request: Request)
       }
       if (!object(parsed)) return reply({ error: 'INVALID_JSON_OBJECT' }, 400);
       body = parsed;
-      if (!['status', 'models', 'analyze'].includes(String(body.action))) return reply({ error: 'INVALID_ACTION' }, 400);
-      if (body.action === 'status') {
+      const action = body.action;
+      if (action !== 'status' && action !== 'models' && action !== 'analyze') return reply({ error: 'INVALID_ACTION' }, 400);
+      const admit = async (requestId: string) => {
+        try {
+          const admission = await deps.reserve(userId, action, requestId, controller.signal);
+          if (admission === 'ALLOWED') return null;
+          if (['REQUEST_IN_PROGRESS', 'RATE_LIMITED', 'PROJECT_LIMIT', 'PROJECT_BUSY'].includes(admission)) {
+            return reply({ error: admission }, 429);
+          }
+        } catch { /* Quota storage failure must never grant upstream access. */ }
+        return reply({ error: 'ADMISSION_UNAVAILABLE' }, 503);
+      };
+      if (action === 'status') {
         if (!only(body, ['action'])) return reply({ error: 'INVALID_STATUS' }, 400);
+        const blocked = await admit(crypto.randomUUID());
+        if (blocked) return blocked;
         return reply({ ready: true, models: AI_MODELS.map(model => model.id), limits: { maxTokens: AI_OUTPUT_LIMIT, maxRequestCostUsd: MAX_AI_REQUEST_COST_USD }, upstreamChecked: false, protocols: ['identity-v1', STORY_PLOT_PROTOCOL, STORY_IDENTITY_PROTOCOL] });
       }
       if (typeof body.apiKey !== 'string' || !/^[A-Za-z0-9._-]{10,256}$/.test(body.apiKey)) return reply({ error: 'INVALID_KEY' }, 400);
@@ -163,12 +185,21 @@ export function createDeepseekProxy(deps: ProxyDependencies): (request: Request)
       if (controller.signal.aborted) return reply({ error: 'REQUEST_ABORTED' }, 499);
       if (activeUsers.has(userId)) return reply({ error: 'REQUEST_IN_PROGRESS' }, 429);
       activeUser = userId; activeUsers.add(userId);
+      providerLease = { userId, requestId: crypto.randomUUID() };
+      const blocked = await admit(providerLease.requestId);
+      if (blocked) {
+        // An explicit rejection committed no lease. On an uncertain timeout,
+        // attempt to release this request ID in case the reservation committed.
+        if (blocked.status === 429) providerLease = undefined;
+        return blocked;
+      }
+      if (controller.signal.aborted) return reply({ error: 'REQUEST_ABORTED' }, 499);
       const response = await deps.fetch(`https://api.deepseek.com/${body.action === 'models' ? 'models' : 'chat/completions'}`, {
         method: body.action === 'models' ? 'GET' : 'POST', redirect: 'error',
         headers: { Authorization: `Bearer ${body.apiKey}`, 'Content-Type': 'application/json' }, body: upstreamBody, signal: controller.signal,
       });
       if (!response.ok) {
-        await response.body?.cancel();
+        void response.body?.cancel().catch(() => {});
         return reply({ error: 'UPSTREAM_ERROR' }, [401, 402, 429].includes(response.status) ? response.status : 502);
       }
       let value: unknown;
@@ -187,7 +218,12 @@ export function createDeepseekProxy(deps: ProxyDependencies): (request: Request)
     finally {
       clearTimeout(timer); req.signal.removeEventListener('abort', cancel);
       if (body) body.apiKey = '';
+      if (providerLease) {
+        try { await deps.release(providerLease.userId, providerLease.requestId); }
+        catch { /* A failed release expires automatically. */ }
+      }
       if (activeUser) activeUsers.delete(activeUser);
+      pending--;
     }
   };
 }

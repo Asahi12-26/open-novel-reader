@@ -1,4 +1,11 @@
 project_id = "open-novel-reader"
 
+[auth]
+enable_signup = false
+enable_anonymous_sign_ins = false
+
+[auth.email]
+enable_confirmations = true
+
 [functions.deepseek-proxy]
 verify_jwt = true

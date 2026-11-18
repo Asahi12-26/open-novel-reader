@@ -16,7 +16,7 @@ vi.mock('@supabase/supabase-js', () => ({ createClient: (_url: string, _key: str
 import { db, ReaderDatabase } from '../core/db';
 import { resetCharacterAvatar, validateAvatarImage } from '../core/avatar';
 import { importBook, listChapters, saveProgress, deleteBook, exportBackup, restoreBackup } from '../core/library';
-import { CLOUD_BUNDLE_MAX_BYTES, CLOUD_FILE_MAX_BYTES, configureCloud, filterBooksForAccount, prepareLocalBookForAccount, prepareLocalProfileForAccount, setBookCloud, syncLibrary } from './cloud';
+import { CLOUD_BUNDLE_MAX_BYTES, CLOUD_FILE_MAX_BYTES, configureCloud, filterBooksForAccount, getPrivateCloudAccess, prepareLocalBookForAccount, prepareLocalProfileForAccount, setBookCloud, syncLibrary } from './cloud';
 import { initializeCharacterIdentity, manualAddAlias } from './character-identity';
 import { defaultPreferences } from '../types';
 import { seriesBookId } from '../core/series-types';
@@ -42,6 +42,13 @@ class MemoryTransport {
   beforeNextAvatarUpload?: () => Promise<void>;
   afterNextAvatarDownload?: () => Promise<void>;
   uploads = 0;
+  recordReads = 0;
+  fileChecks = 0;
+  allowedPrivateUsers = new Set(['account-a', 'account-b']);
+  privateAccessError = false;
+  beforeNextPrivateAccess?: () => Promise<void>;
+  beforeNextSave?: () => Promise<void>;
+  failUploadPath?: { path: string; status: number };
   afterNextSave?: () => Promise<void>;
   beforeNextGetUser?: () => Promise<void>;
   afterNextUpload?: () => Promise<void>;
@@ -68,15 +75,35 @@ class MemoryTransport {
       },
       removeAllChannels: async () => {},
       from: (table: string) => {
+        let selected = '';
+        let requestedId = '';
         const query = {
-          select: () => query, eq: () => query, order: () => query,
-          range: async (start: number, end: number) => ({ data: clone([...this.rows(user()).values()].sort((a, b) => a.id.localeCompare(b.id)).slice(start, end + 1)), error: null }),
-          maybeSingle: async () => ({ data: this.profiles.has(user()) ? clone(this.profiles.get(user())) : null, error: null }),
+          select: (fields: string) => { selected = fields; return query; },
+          eq: (field: string, value: string) => { if (field === 'id') requestedId = value; return query; },
+          order: () => query,
+          range: async (start: number, end: number) => {
+            expect(selected).toBe('id,revision');
+            const data = [...this.rows(user()).values()].map(({ id, revision }) => ({ id, revision }));
+            return { data: data.sort((a, b) => a.id.localeCompare(b.id)).slice(start, end + 1), error: null };
+          },
+          maybeSingle: async () => {
+            if (table === 'reader_records') {
+              expect(selected).toBe('id,payload,revision');
+              this.recordReads++;
+              const data = this.rows(user()).get(requestedId);
+              return { data: data ? clone(data) : null, error: null };
+            }
+            return { data: this.profiles.has(user()) ? clone(this.profiles.get(user())) : null, error: null };
+          },
         };
         if (!['reader_records', 'reader_profiles'].includes(table)) throw new Error('Unexpected table');
         return query;
       },
       rpc: async (name: string, args: { p_id: string; p_payload: BookBundle; p_expected_revision: number }) => {
+        if (name === 'reader_has_private_cloud') {
+          const callback = this.beforeNextPrivateAccess; this.beforeNextPrivateAccess = undefined; await callback?.();
+          return this.privateAccessError ? { data: null, error: { message: 'GATE_UNAVAILABLE' } } : { data: this.allowedPrivateUsers.has(user()), error: null };
+        }
         if (name === 'save_reader_profile') {
           this.profileWrites++;
           const before = this.beforeNextProfileWrite; this.beforeNextProfileWrite = undefined; await before?.();
@@ -87,6 +114,7 @@ class MemoryTransport {
           const after = this.afterNextProfileSave; this.afterNextProfileSave = undefined; await after?.();
           return { data: revision, error: null };
         }
+        const before = this.beforeNextSave; this.beforeNextSave = undefined; await before?.();
         const rows = this.rows(user()); const previous = rows.get(args.p_id);
         if ((previous?.revision || 0) !== args.p_expected_revision) return { data: null, error: { message: 'SYNC_CONFLICT' } };
         const revision = (previous?.revision || 0) + 1;
@@ -108,8 +136,13 @@ class MemoryTransport {
           return { data, error: data ? null : { message: 'NOT_FOUND' } };
         },
       } : ({
-        exists: async (path: string) => ({ data: this.files.has(path), error: null }),
-        upload: async (path: string, bytes: Blob) => { this.files.set(path, bytes); this.uploads++; const callback = this.afterNextUpload; this.afterNextUpload = undefined; await callback?.(); return { error: null }; },
+        exists: async (path: string) => { this.fileChecks++; return { data: this.files.has(path), error: null }; },
+        upload: async (path: string, bytes: Blob) => {
+          if (this.failUploadPath?.path === path) return { error: { status: this.failUploadPath.status } };
+          this.files.set(path, bytes); this.uploads++;
+          const callback = this.afterNextUpload; this.afterNextUpload = undefined; await callback?.();
+          return { error: null };
+        },
         download: async (path: string) => { const result = { data: this.files.get(path), error: this.files.has(path) ? null : { message: 'NOT_FOUND' } }; const callback = this.afterNextDownload; this.afterNextDownload = undefined; await callback?.(); return result; },
         remove: async (paths: string[]) => { const callback = this.beforeNextRemove; this.beforeNextRemove = undefined; await callback?.(); for (const path of paths) this.files.delete(path); return { error: null }; },
       }) },
@@ -388,6 +421,116 @@ describe('two-device client synchronization with an offline transport', () => {
     expect((await db.books.get(book.id))?.title).toBe('本机重新命名');
     expect(await db.progress.get(book.id)).toMatchObject({ paragraphIndex: 1, offset: 2 });
     expect(transport.rows().get(book.id)?.payload.progress).toMatchObject({ paragraphIndex: 1, offset: 2 });
+  });
+  it('polls revisions without refetching unchanged books or checking their Storage objects', async () => {
+    const book = await consentAndUpload();
+    state.database = deviceB; await syncLibrary({ verifyUnchangedFiles: false });
+    const reads = transport.recordReads; const checks = transport.fileChecks;
+    await syncLibrary({ verifyUnchangedFiles: false });
+    expect(transport.recordReads).toBe(reads);
+    expect(transport.fileChecks).toBe(checks);
+    state.database = deviceA;
+    await db.books.update(book.id, { author: '新的作者名', updatedAt: Date.now() + 10 });
+    await syncLibrary({ verifyUnchangedFiles: false });
+    expect(transport.recordReads).toBe(reads);
+    state.database = deviceB; await syncLibrary({ verifyUnchangedFiles: false });
+    expect(transport.recordReads).toBe(reads + 1);
+    expect((await db.books.get(book.id))?.author).toBe('新的作者名');
+  });
+  it('retries a book revision race with current local progress and merges independent book metadata edits', async () => {
+    const book = await consentAndUpload();
+    const chapter = (await listChapters(book.id))[0];
+    await db.books.update(book.id, { title: '本机修改书名', updatedAt: Date.now() + 10 });
+    transport.beforeNextSave = async () => {
+      const current = transport.rows().get(book.id)!;
+      transport.rows().set(book.id, { ...current, revision: current.revision + 1, payload: { ...current.payload,
+        book: { ...current.payload.book, author: '远程修改作者', updatedAt: Date.now() + 100 } } });
+      await saveProgress(book.id, chapter.id, 1, 2);
+    };
+    expect(await syncLibrary()).toMatchObject({ uploaded: 1, conflicts: 1 });
+    expect(transport.rows().get(book.id)?.payload).toMatchObject({
+      book: { title: '本机修改书名', author: '远程修改作者' },
+      progress: { paragraphIndex: 1, offset: 2 },
+    });
+    expect(await db.books.get(book.id)).toMatchObject({ title: '本机修改书名', author: '远程修改作者' });
+  });
+  it('preserves both versions of a conflicting metadata field and syncs after the reader aligns them', async () => {
+    const book = await consentAndUpload();
+    state.database = deviceB; await syncLibrary();
+    await db.books.update(book.id, { title: '另一台的标题', updatedAt: Date.now() + 100 });
+    await syncLibrary();
+    state.database = deviceA;
+    await db.books.update(book.id, { title: '此处的标题', updatedAt: Date.now() + 10 });
+    await expect(syncLibrary()).rejects.toThrow('书名在两台设备上都有不同修改');
+    expect((await db.books.get(book.id))?.title).toBe('此处的标题');
+    expect(transport.rows().get(book.id)?.payload.book.title).toBe('另一台的标题');
+    await db.books.update(book.id, { title: '另一台的标题', updatedAt: Date.now() + 200 });
+    await expect(syncLibrary()).resolves.toMatchObject({ uploaded: 1 });
+  });
+  it('keeps unrelated books and preferences syncing through a project upload limit or interrupted upload', async () => {
+    const limited = await importBook(novel());
+    const other = await importBook(new File(['Chapter One\nAnother local story.'], 'Other.txt'));
+    await setBookCloud(limited.id, true); await setBookCloud(other.id, true);
+    await db.settings.put({ id: 'preferences', value: { ...defaultPreferences, theme: 'dark' } });
+    transport.failUploadPath = { path: `account-a/${limited.id}/original.txt`, status: 413 };
+    await expect(syncLibrary()).rejects.toThrow('文件超出当前云项目上传限制');
+    expect(transport.rows().has(other.id)).toBe(true);
+    expect(transport.rows().has(limited.id)).toBe(false);
+    expect(transport.profiles.get('account-a')?.payload.preferences.theme).toBe('dark');
+    expect(await listChapters(limited.id)).toHaveLength(2);
+    transport.failUploadPath.status = 503;
+    await expect(syncLibrary()).rejects.toThrow('未完成的文件将从头上传');
+    transport.failUploadPath = undefined;
+    expect(await syncLibrary()).toMatchObject({ uploaded: 1 });
+    expect(transport.rows().size).toBe(2);
+  });
+  it('keeps offline changes local and converges on reconnect without requiring another import', async () => {
+    const book = await consentAndUpload();
+    const chapter = (await listChapters(book.id))[0];
+    const offline = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    try {
+      await saveProgress(book.id, chapter.id, 1, 2);
+      await expect(syncLibrary()).rejects.toThrow('当前离线');
+      expect(transport.rows().get(book.id)?.payload.progress).toBeUndefined();
+      expect(await db.progress.get(book.id)).toMatchObject({ paragraphIndex: 1, offset: 2 });
+    } finally { offline.mockRestore(); }
+    await syncLibrary();
+    state.database = deviceB; await syncLibrary();
+    expect(await db.progress.get(book.id)).toMatchObject({ paragraphIndex: 1, offset: 2 });
+  });
+  it('does not send cloud data for an authenticated account outside the owner whitelist', async () => {
+    transport.currentUser = 'account-b';
+    transport.allowedPrivateUsers.delete('account-b');
+    const book = await importBook(novel());
+    expect(await getPrivateCloudAccess('account-b')).toBe('denied');
+    await expect(setBookCloud(book.id, true)).rejects.toThrow('未获准');
+    await expect(syncLibrary()).rejects.toThrow('未获准');
+    expect(transport.recordReads).toBe(0);
+    expect(transport.uploads).toBe(0);
+    expect(await listChapters(book.id)).toHaveLength(2);
+    expect(await filterBooksForAccount([book])).toContain(book);
+  });
+  it('fails closed when owner verification is unavailable or the authenticated session changes during it', async () => {
+    const book = await importBook(novel());
+    transport.privateAccessError = true;
+    expect(await getPrivateCloudAccess('account-a')).toBe('unavailable');
+    await expect(setBookCloud(book.id, true)).rejects.toThrow('暂时无法验证私有云权限');
+    transport.privateAccessError = false;
+    transport.beforeNextPrivateAccess = async () => { transport.currentUser = 'account-b'; };
+    expect(await getPrivateCloudAccess('account-a')).toBe('unavailable');
+    expect((await db.books.get(book.id))?.cloudEnabled).toBe(false);
+    expect(transport.uploads).toBe(0);
+  });
+  it('allows the active owner to revoke upload consent offline even when the server gate is inaccessible', async () => {
+    const book = await consentAndUpload();
+    const offline = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    try {
+      transport.privateAccessError = true;
+      await setBookCloud(book.id, false);
+      expect((await db.books.get(book.id))?.cloudEnabled).toBe(false);
+      expect(await listChapters(book.id)).toHaveLength(2);
+      expect(transport.rows().has(book.id)).toBe(true);
+    } finally { offline.mockRestore(); }
   });
   it('retains a remote bookmark when local reading changes during a merged upload', async () => {
     const book = await consentAndUpload();

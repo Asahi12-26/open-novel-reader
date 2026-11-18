@@ -4,6 +4,8 @@ select plan(11);
 insert into auth.users(id, email) values
   ('00000000-0000-0000-0000-000000000021', 'safety-a@example.invalid'),
   ('00000000-0000-0000-0000-000000000022', 'safety-b@example.invalid');
+insert into reader_private.cloud_members(user_id) values
+  ('00000000-0000-0000-0000-000000000021'), ('00000000-0000-0000-0000-000000000022');
 set local role authenticated;
 set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000021","role":"authenticated"}';
 select is(public.save_reader_record('restored', '{"schema":1,"book":{"id":"restored","restoredAt":10}}', 0), 1::bigint, 'initial restored record is saved');

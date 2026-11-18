@@ -84,6 +84,7 @@ The source archives retain the upstream license texts and notices. See [THIRD_PA
 | embed-resource | 3.0.12 | MIT | [source archive](https://crates.io/api/v1/crates/embed-resource/3.0.12/download) |
 | equivalent | 1.0.3 | Apache-2.0 OR MIT | [source archive](https://crates.io/api/v1/crates/equivalent/1.0.3/download) |
 | erased-serde | 0.4.11 | MIT OR Apache-2.0 | [source archive](https://crates.io/api/v1/crates/erased-serde/0.4.11/download) |
+| errno | 0.3.15 | MIT OR Apache-2.0 | [source archive](https://crates.io/api/v1/crates/errno/0.3.15/download) |
 | fastrand | 2.5.0 | Apache-2.0 OR MIT | [source archive](https://crates.io/api/v1/crates/fastrand/2.5.0/download) |
 | fdeflate | 0.3.7 | MIT OR Apache-2.0 | [source archive](https://crates.io/api/v1/crates/fdeflate/0.3.7/download) |
 | field-offset | 0.3.6 | MIT OR Apache-2.0 | [source archive](https://crates.io/api/v1/crates/field-offset/0.3.6/download) |
@@ -174,6 +175,7 @@ The source archives retain the upstream license texts and notices. See [THIRD_PA
 | libdbus-sys | 0.2.7 | Apache-2.0/MIT | [source archive](https://crates.io/api/v1/crates/libdbus-sys/0.2.7/download) |
 | libloading | 0.7.4 | ISC | [source archive](https://crates.io/api/v1/crates/libloading/0.7.4/download) |
 | libredox | 0.1.25 | MIT | [source archive](https://crates.io/api/v1/crates/libredox/0.1.25/download) |
+| linux-raw-sys | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | [source archive](https://crates.io/api/v1/crates/linux-raw-sys/0.12.1/download) |
 | litemap | 0.8.3 | Unicode-3.0 | [source archive](https://crates.io/api/v1/crates/litemap/0.8.3/download) |
 | lock_api | 0.4.14 | MIT OR Apache-2.0 | [source archive](https://crates.io/api/v1/crates/lock_api/0.4.14/download) |
 | log | 0.4.35 | MIT OR Apache-2.0 | [source archive](https://crates.io/api/v1/crates/log/0.4.35/download) |
@@ -250,8 +252,10 @@ The source archives retain the upstream license texts and notices. See [THIRD_PA
 | regex-automata | 0.4.18 | MIT OR Apache-2.0 | [source archive](https://crates.io/api/v1/crates/regex-automata/0.4.18/download) |
 | regex-syntax | 0.8.11 | MIT OR Apache-2.0 | [source archive](https://crates.io/api/v1/crates/regex-syntax/0.8.11/download) |
 | reqwest | 0.13.5 | MIT OR Apache-2.0 | [source archive](https://crates.io/api/v1/crates/reqwest/0.13.5/download) |
+| rfd | 0.17.2 | MIT | [source archive](https://crates.io/api/v1/crates/rfd/0.17.2/download) |
 | rustc_version | 0.4.1 | MIT OR Apache-2.0 | [source archive](https://crates.io/api/v1/crates/rustc_version/0.4.1/download) |
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT | [source archive](https://crates.io/api/v1/crates/rustc-hash/2.1.3/download) |
+| rustix | 1.1.6 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | [source archive](https://crates.io/api/v1/crates/rustix/1.1.6/download) |
 | rustversion | 1.0.23 | MIT OR Apache-2.0 | [source archive](https://crates.io/api/v1/crates/rustversion/1.0.23/download) |
 | same-file | 1.0.6 | Unlicense/MIT | [source archive](https://crates.io/api/v1/crates/same-file/1.0.6/download) |
 | schemars | 0.8.22 | MIT | [source archive](https://crates.io/api/v1/crates/schemars/0.8.22/download) |
@@ -304,10 +308,14 @@ The source archives retain the upstream license texts and notices. See [THIRD_PA
 | tauri-build | 2.7.4 | Apache-2.0 OR MIT | [source archive](https://crates.io/api/v1/crates/tauri-build/2.7.4/download) |
 | tauri-codegen | 2.7.4 | Apache-2.0 OR MIT | [source archive](https://crates.io/api/v1/crates/tauri-codegen/2.7.4/download) |
 | tauri-macros | 2.7.4 | Apache-2.0 OR MIT | [source archive](https://crates.io/api/v1/crates/tauri-macros/2.7.4/download) |
+| tauri-plugin | 2.7.3 | Apache-2.0 OR MIT | [source archive](https://crates.io/api/v1/crates/tauri-plugin/2.7.3/download) |
+| tauri-plugin-dialog | 2.8.4 | Apache-2.0 OR MIT | [source archive](https://crates.io/api/v1/crates/tauri-plugin-dialog/2.8.4/download) |
+| tauri-plugin-fs | 2.7.1 | Apache-2.0 OR MIT | [source archive](https://crates.io/api/v1/crates/tauri-plugin-fs/2.7.1/download) |
 | tauri-runtime | 2.12.2 | Apache-2.0 OR MIT | [source archive](https://crates.io/api/v1/crates/tauri-runtime/2.12.2/download) |
 | tauri-runtime-wry | 2.12.3 | Apache-2.0 OR MIT | [source archive](https://crates.io/api/v1/crates/tauri-runtime-wry/2.12.3/download) |
-| tauri-utils | 2.10.2 | Apache-2.0 OR MIT | [source archive](https://crates.io/api/v1/crates/tauri-utils/2.10.2/download) |
+| tauri-utils | 2.10.3 | Apache-2.0 OR MIT | [source archive](https://crates.io/api/v1/crates/tauri-utils/2.10.3/download) |
 | tauri-winres | 0.3.7 | MIT | [source archive](https://crates.io/api/v1/crates/tauri-winres/0.3.7/download) |
+| tempfile | 3.27.0 | MIT OR Apache-2.0 | [source archive](https://crates.io/api/v1/crates/tempfile/3.27.0/download) |
 | tendril | 0.5.1 | MIT OR Apache-2.0 | [source archive](https://crates.io/api/v1/crates/tendril/0.5.1/download) |
 | thiserror | 1.0.69 | MIT OR Apache-2.0 | [source archive](https://crates.io/api/v1/crates/thiserror/1.0.69/download) |
 | thiserror | 2.0.21 | MIT OR Apache-2.0 | [source archive](https://crates.io/api/v1/crates/thiserror/2.0.21/download) |

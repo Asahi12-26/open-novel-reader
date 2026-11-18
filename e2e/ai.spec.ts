@@ -1,46 +1,39 @@
 import { test, expect, type Page, type BrowserContext } from '@playwright/test';
 
-const project = 'https://offline-ai.supabase.co';
-const publicKey = 'sb_publishable_offline_browser_fixture';
-const userId = '00000000-0000-4000-8000-000000000003';
 const key = 'fixture-key-not-a-provider-credential';
 const bookName = 'V03离线人物验证';
 
-async function mockAccount(page: Page, context: BrowserContext) {
-  let statusCalls = 0;
+async function mockProvider(context: BrowserContext) {
+  let modelCalls = 0;
+  let otherExternalCalls = 0;
   const requests: { input: { dialogues: { id: string }[] } }[] = [];
-  await context.route('https://api.deepseek.com/**', route => route.abort('blockedbyclient'));
-  await context.route(`${project}/**`, async route => {
-    const url = new URL(route.request().url());
-    if (url.pathname === '/functions/v1/deepseek-proxy') {
-      const body = route.request().postDataJSON();
-      if (body.action === 'status') {
-        expect(body.apiKey).toBeUndefined(); statusCalls++;
-        return route.fulfill({ json: { ready: true, upstreamChecked: false, models: ['deepseek-flash', 'deepseek-v4-pro'], limits: { maxTokens: 4096, maxRequestCostUsd: 0.1 } } });
-      }
-      expect(body.action).toBe('analyze');
-      requests.push(body);
-      if (requests.length === 2) return route.fulfill({ status: 503, json: { error: 'OFFLINE_FIXTURE_FAILURE' } });
-      return route.fulfill({ json: { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ dialogues: body.input.dialogues.map((item: { id: string }) => ({ id: item.id, speaker: '林青', confidence: 0.96 })) }) } }] } });
-    }
-    if (url.pathname === '/auth/v1/user') return route.fulfill({ json: { id: userId, aud: 'authenticated', role: 'authenticated', email: 'offline-ai@example.invalid', app_metadata: { provider: 'email', providers: ['email'] }, user_metadata: {}, created_at: new Date().toISOString() } });
-    if (url.pathname.startsWith('/rest/v1/')) return route.fulfill({ json: [] });
-    return route.fulfill({ status: 400, json: { error: 'OFFLINE_FIXTURE_ONLY' } });
+  await context.route('https://**/*', route => { otherExternalCalls++; return route.abort('blockedbyclient'); });
+  await context.route('https://api.deepseek.com/models', async route => {
+    expect(route.request().method()).toBe('GET');
+    expect(await route.request().headerValue('authorization')).toBe(`Bearer ${key}`);
+    expect(route.request().postData()).toBeNull();
+    modelCalls++;
+    return route.fulfill({ json: { data: [{ id: 'deepseek-flash' }] } });
   });
-  await page.addInitScript(({ project, publicKey, userId }) => {
-    const encode = (value: object) => btoa(JSON.stringify(value)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-    const expires = Math.floor(Date.now() / 1000) + 3600;
-    const token = `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode({ sub: userId, exp: expires, role: 'authenticated', aud: 'authenticated' })}.offlinefixture`;
-    localStorage.setItem('onr.cloud.public-config', JSON.stringify({ url: project, anonKey: publicKey }));
-    localStorage.setItem('onr.auth.offline-ai.supabase.co', JSON.stringify({ access_token: token, refresh_token: 'offline-refresh-fixture', token_type: 'bearer', expires_in: 3600, expires_at: expires, user: { id: userId, aud: 'authenticated', role: 'authenticated', email: 'offline-ai@example.invalid', app_metadata: { provider: 'email', providers: ['email'] }, user_metadata: {}, created_at: new Date().toISOString() } }));
-  }, { project, publicKey, userId });
-  return { requests, get statusCalls() { return statusCalls; } };
+  await context.route('https://api.deepseek.com/chat/completions', async route => {
+    const request = route.request();
+    expect(request.method()).toBe('POST');
+    expect(await request.headerValue('authorization')).toBe(`Bearer ${key}`);
+    expect(request.postData()).not.toContain(key);
+    const body = request.postDataJSON();
+    expect(body).toMatchObject({ model: 'deepseek-flash', max_tokens: 4096, stream: false });
+    const input = JSON.parse(body.messages[1].content);
+    requests.push({ input });
+    if (requests.length === 2) return route.fulfill({ status: 503, json: { error: 'OFFLINE_FIXTURE_FAILURE' } });
+    return route.fulfill({ json: { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ dialogues: input.dialogues.map((item: { id: string }) => ({ id: item.id, speaker: '林青', confidence: 0.96 })) }) } }] } });
+  });
+  return { requests, get modelCalls() { return modelCalls; }, get otherExternalCalls() { return otherExternalCalls; } };
 }
 
 async function loadKey(page: Page) {
-  await page.getByRole('button', { name: '设置与云同步', exact: true }).click();
+  await page.getByRole('button', { name: '应用设置', exact: true }).click();
   const settings = page.getByRole('dialog', { name: '你的阅读空间', exact: true });
-  await settings.getByRole('button', { name: 'AI 模型', exact: true }).click();
+  await settings.getByRole('button', { name: 'AI 配置', exact: true }).click();
   await settings.getByLabel('DeepSeek API Key', { exact: true }).fill(key);
   await settings.getByRole('button', { name: '载入密钥', exact: true }).click();
   await expect(settings.getByRole('button', { name: '清除密钥', exact: true })).toBeEnabled();
@@ -53,21 +46,41 @@ async function openAnalysis(page: Page) {
   return page.getByRole('dialog', { name: '听见故事里的人', exact: true });
 }
 
+test('guest BYOK guide makes only the explicit read-only provider check and clears the key on reload', async ({ page, context }) => {
+  const fixture = await mockProvider(context);
+  await page.goto('/');
+  await page.getByRole('button', { name: '按需配置 AI', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '你的阅读空间', exact: true });
+  const field = dialog.getByLabel('DeepSeek API Key', { exact: true });
+  const checkModel = dialog.getByRole('button', { name: '测试连接（仅查询模型）', exact: true });
+  await expect(dialog.getByRole('heading', { name: '模型与预算', exact: true })).toBeVisible();
+  await expect(checkModel).toBeDisabled();
+  await field.fill(key);
+  await dialog.getByRole('button', { name: '载入密钥', exact: true }).click();
+  await expect(field).toHaveValue('');
+  await expect(dialog.getByText('已载入当前会话', { exact: true })).toBeVisible();
+  expect(fixture.modelCalls).toBe(0);
+  await checkModel.click();
+  await expect(dialog.getByText('模型查询成功，可用模型 DeepSeek Flash。本次未生成文本。', { exact: true })).toBeVisible();
+  expect(fixture.otherExternalCalls).toBe(0);
+  expect(fixture.modelCalls).toBe(1);
+  expect(fixture.requests).toHaveLength(0);
+  await page.reload();
+  await page.getByRole('button', { name: '按需配置 AI', exact: true }).click();
+  await expect(field).toHaveValue('');
+  await expect(dialog.getByText('尚未载入密钥', { exact: true })).toBeVisible();
+  await expect(checkModel).toBeDisabled();
+});
+
 test('offline AI UI requires consent and resumes saved work after reload without resending completed chunks', async ({ page, context }) => {
   test.setTimeout(65000);
-  const fixture = await mockAccount(page, context);
+  const fixture = await mockProvider(context);
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/');
   const source = `第一章 见面\n\n${Array.from({ length: 13 }, (_, i) => `林青说：“第${i + 1}句话，明天见。”`).join('\n\n')}\n\n第二章 静景\n\n这里是没有对白的安静段落。`;
   await page.getByLabel('导入小说文件', { exact: true }).setInputFiles({ name: `${bookName}.txt`, mimeType: 'text/plain', buffer: Buffer.from(source) });
   await expect(page.getByRole('button', { name: `阅读 ${bookName}`, exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '设置与云同步', exact: true }).click();
-  const settings = page.getByRole('dialog', { name: '你的阅读空间', exact: true });
-  await settings.getByRole('button', { name: 'AI 模型', exact: true }).click();
-  await settings.getByRole('button', { name: '检查代理（不调用模型）', exact: true }).click();
-  await expect(settings.getByText('代理检查通过，登录正常。本次检查未访问 DeepSeek。', { exact: true })).toBeVisible();
-  expect(fixture.statusCalls).toBe(1); expect(fixture.requests).toHaveLength(0);
-  await settings.getByRole('button', { name: '关闭', exact: true }).click();
+  expect(fixture.otherExternalCalls).toBe(0); expect(fixture.requests).toHaveLength(0);
   await loadKey(page);
   await page.getByRole('button', { name: `阅读 ${bookName}`, exact: true }).click();
   let panel = await openAnalysis(page);
@@ -104,6 +117,7 @@ test('offline AI UI requires consent and resumes saved work after reload without
   await expect(panel.getByText('识别完成', { exact: true })).toBeVisible();
   await expect(panel.getByText(/13 句对白 · 13 句已归属/)).toBeVisible();
   expect(fixture.requests).toHaveLength(3);
+  expect(fixture.otherExternalCalls).toBe(0);
   expect(fixture.requests[0].input.dialogues).toHaveLength(12);
   expect(fixture.requests[2].input.dialogues.map(item => item.id)).toEqual(fixture.requests[1].input.dialogues.map(item => item.id));
   await page.screenshot({ path: 'artifacts/qa/v03-ai-offline-results.png' });

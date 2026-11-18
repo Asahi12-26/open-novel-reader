@@ -4,6 +4,8 @@ select plan(7);
 insert into auth.users(id, email) values
   ('00000000-0000-0000-0000-000000000011', 'profile-a@example.invalid'),
   ('00000000-0000-0000-0000-000000000012', 'profile-b@example.invalid');
+insert into reader_private.cloud_members(user_id) values
+  ('00000000-0000-0000-0000-000000000011'), ('00000000-0000-0000-0000-000000000012');
 set local role authenticated;
 set local request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000011","role":"authenticated"}';
 select is(public.save_reader_profile('{"preferences":{"theme":"dark"},"shelves":[]}', 0), 1::bigint, 'owner creates initial profile');

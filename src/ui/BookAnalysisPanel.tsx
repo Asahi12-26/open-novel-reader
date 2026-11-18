@@ -18,12 +18,12 @@ const stageText: Record<BookAnalysisJob['stage'], string> = {
   preparing: '预处理章节与对白', understanding: '理解剧情并保存证据', analyzing: '识别对白与统一人物', reviewing: '复核未知与冲突', done: '结果已保存',
 };
 
-export default function BookAnalysisPanel({ bookId, chapters, dialogues, getCharacter, scope, showAll, summaryChapterId, seriesAccess, openRevision = 0, onActivity, onClose, onViewResults }: {
+export default function BookAnalysisPanel({ bookId, chapters, dialogues, getCharacter, scope, showAll, summaryChapterId, seriesAccess, openRevision = 0, onActivity, onConfigureAI, onClose, onViewResults }: {
   bookId: string; chapters: Chapter[]; scope: IdentityScope; showAll: boolean;
   dialogues: readonly Dialogue[]; getCharacter: (id: string | null) => Character | undefined;
   summaryChapterId?: string; seriesAccess: SeriesAccess;
   openRevision?: number; onActivity?: (active: boolean) => void;
-  onClose: () => void; onViewResults: (chapter: Chapter, paragraphIndex: number) => void;
+  onConfigureAI: () => void; onClose: () => void; onViewResults: (chapter: Chapter, paragraphIndex: number) => void;
 }) {
   const [mode, setMode] = useState<BookAnalysisMode>(summaryChapterId ? 'deep' : 'reading-progress');
   const [seriesMemory, setSeriesMemory] = useState<readonly SeriesMemorySelection[]>([]);
@@ -167,7 +167,8 @@ export default function BookAnalysisPanel({ bookId, chapters, dialogues, getChar
     {!locked && validBudget && estimate && budgetValue < estimate.estimatedMaxUsd && <p className="inline-warning">总预算低于估算上界。任务只在总预算内推进，可能提前停止并保留已完成结果。</p>}
     {!locked && mode === 'deep' && estimate?.dialogueCount === 0 && <p className="fine-print">暂无可识别对白，可生成有证据的剧情简介。</p>}
     {job && <p className="fine-print">原任务的模式、模型和总预算已固定。继续会保留全部费用预留；需要不同设置时，请明确新建任务。</p>}
-    {!keyReady && <p className="inline-warning">需在「设置 → AI 模型」重新载入本次会话密钥。已保存结果和进度仍可查看，不会自动发起请求。</p>}
+    {!keyReady && <div className="ai-setup-jump"><p className="inline-warning">请重新载入会话密钥。已保存结果和进度仍可查看。</p>
+      <button className="secondary" type="button" disabled={working} onClick={onConfigureAI}>打开 AI 配置</button></div>}
     <label className="checkbox-row authorization"><input aria-label="授权整书任务" type="checkbox" checked={authorized} disabled={working} onChange={event => { formEdited.current = true; setAuthorized(event.target.checked); }}/>我明确授权发送上述范围内的原文、必要人物证据及勾选的系列记忆，在固定累计预算内完成当前分析。{mode === 'reading-progress' && '本次活动会话可随我的阅读进度继续。'}失败后的收费重试须由我再次授权。</label>
     {error && <p className="inline-error" role="alert">{error}</p>}
     {job && <section className="job-status" aria-label="整书任务进度" aria-live="polite">

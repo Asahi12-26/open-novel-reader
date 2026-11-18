@@ -1,9 +1,9 @@
 [package]
 name = "open-novel-reader"
-version = "0.6.0-beta.1"
+version = "0.6.1-beta.1"
 description = "A local-first, open-source novel reader"
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.90"
 license = "AGPL-3.0-only"
 
 [lib]
@@ -15,6 +15,13 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+tempfile = "3"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+tauri-plugin-dialog = "2.8"
+
+[target.'cfg(target_os = "android")'.dependencies]
+tauri-plugin-onr-backup = { path = "plugins/onr-backup" }
 
 [profile.release]
 codegen-units = 1

@@ -8,10 +8,12 @@ test('account settings remain usable on a narrow offline device without sending 
   await importText(page, '离线账号书架.txt');
   await page.getByRole('button', { name: '关闭提示', exact: true }).click();
   await context.setOffline(true);
-  await page.getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('button', { name: '账号与云同步', exact: true }).click();
+  await page.getByRole('button', { name: '应用设置', exact: true }).click();
+  await page.getByText('高级设置', { exact: true }).click();
+  await page.getByRole('button', { name: '私有云同步', exact: true }).click();
   const account = page.locator('.account-panel');
-  await expect(account.getByRole('heading', { name: '登录阅见', exact: true })).toBeVisible();
+  await expect(account.getByRole('heading', { name: '登录私有云', exact: true })).toBeVisible();
+  await expect(account.getByRole('button', { name: /注册|创建新账号/ })).toHaveCount(0);
   const config = account.locator('.auth-config');
   if (!(await config.getAttribute('open') !== null)) await config.locator('summary').click();
   await expect(account.getByLabel('Supabase 项目地址', { exact: true })).toBeVisible();
