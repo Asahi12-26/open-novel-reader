@@ -157,12 +157,22 @@ export function projectChapterSummary(record: ChapterSummaryRecord, chapter: Cha
   const fragments = record.fragments.filter(row => comparePlotLocations(row.through, cutoff) <= 0);
   const chain: ChapterSummaryFragment[] = [];
   let cursor: IdentityLocation = { chapterIndex: chapter.index, paragraphIndex: 0, offset: 0 };
+  let complete = true;
   // Choose the latest result for the same span. When older partial windows overlap
   // regenerated ranges, prefer the closest contiguous start to avoid repetition.
   while (true) {
     const next = fragments.filter(row => comparePlotLocations(row.from, cursor) <= 0 && comparePlotLocations(row.through, cursor) > 0)
       .sort((a, b) => comparePlotLocations(b.from, a.from) || comparePlotLocations(b.through, a.through) || byRevision(b, a))[0];
-    if (!next) break;
+    if (!next) {
+      // A skipped window can leave a gap. Later verified fragments remain useful,
+      // but the recap stays partial even if they reach the end of the chapter.
+      const later = fragments.reduce<ChapterSummaryFragment | undefined>((earliest, row) =>
+        comparePlotLocations(row.from, cursor) > 0 && (!earliest || comparePlotLocations(row.from, earliest.from) < 0) ? row : earliest, undefined);
+      if (!later) break;
+      complete = false;
+      cursor = later.from;
+      continue;
+    }
     chain.push(next);
     cursor = next.through;
   }
@@ -170,7 +180,7 @@ export function projectChapterSummary(record: ChapterSummaryRecord, chapter: Cha
   const latest = revisions.at(-1);
   const text = latest?.text ?? chain.map(row => row.text).filter(Boolean).join('\n\n');
   return {
-    text, complete: comparePlotLocations(cursor, chapterPlotEnd(chapter)) >= 0,
+    text, complete: complete && comparePlotLocations(cursor, chapterPlotEnd(chapter)) >= 0,
     source: latest ? 'manual' as const : 'ai' as const, flagged: latest?.status === 'flagged', revisions,
     evidence: chain.flatMap(row => row.evidence),
     characterIds: [...new Set(chain.flatMap(row => row.characterIds))],

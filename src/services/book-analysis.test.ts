@@ -8,7 +8,7 @@ import { analyzeBook, estimateBookAnalysis, getBookAnalysisJob, listBookAnalysis
 import type { BookAnalysisController, BookAnalysisJob, BookAnalysisOptions } from './book-analysis-types';
 import { storyAttributions, storySpeechInput } from './book-story';
 import { AI_BOOK_SYSTEM_PROMPT, AI_COST_MARGIN, AI_MODELS, AI_TOKEN_OVERHEAD } from '../../supabase/functions/_shared/ai-contract';
-import { STORY_IDENTITY_SYSTEM_PROMPT, STORY_PLOT_SYSTEM_PROMPT } from '../../supabase/functions/_shared/story-contract';
+import { STORY_IDENTITY_SYSTEM_PROMPT, STORY_PLOT_SYSTEM_PROMPT, type StoryPlotOutput } from '../../supabase/functions/_shared/story-contract';
 
 const cloud = vi.hoisted(() => ({
   config: { url: 'https://book-runner.example.invalid', anonKey: 'sb_publishable_offline_fixture' },
@@ -76,7 +76,7 @@ function mockProxy(failAt?: number) {
   });
   return { calls };
 }
-function assertReservation(job: BookAnalysisJob, calls: AnalysisRequest[]) {
+function assertReservation(job: BookAnalysisJob, calls: readonly { maxCostUsd: number }[]) {
   const sum = calls.reduce((total, call) => total + call.maxCostUsd, 0);
   expect(job.reservedUsd).toBeCloseTo(sum, 10);
   expect(job.reservedUsd).toBeLessThanOrEqual(job.budgetUsd);
@@ -240,7 +240,7 @@ describe('whole-book analysis authorization and checkpointing (offline)', () => 
 });
 
 describe('story-first book analysis pipeline (offline)', () => {
-  function mockStory(failAt?: number) {
+  function mockStory(failAt?: number, editPlot?: (output: StoryPlotOutput, chapter: string) => unknown) {
     const calls: {
       input: { chapter: string; context: { paragraph: number; start: number; text: string }[];
         known: { id: string; name: string }[]; dialogues?: { id: string; text: string }[];
@@ -255,9 +255,10 @@ describe('story-first book analysis pipeline (offline)', () => {
       const context = input.context[0];
       const evidence = { paragraphIndex: context.paragraph, start: context.start, end: context.start + context.text.length, text: context.text };
       const person = input.known.find(row => row.name === '林青');
-      const output = request.protocol === 'plot-v1' ? {
+      const plot: StoryPlotOutput = {
         summary: '林青开口说话。', events: [{ description: '林青开口说话', characters: person ? [person.id] : [], kind: 'claim', confidence: .95, evidence }],
-      } : {
+      };
+      const output = request.protocol === 'plot-v1' ? (editPlot?.(plot, input.chapter) ?? plot) : {
         dialogues: input.dialogues?.map(row => ({ id: row.id, speech: true,
           speaker: '林青', characterId: person?.id ?? null, evidence, confidence: .94 })), identities: [],
       };
@@ -292,6 +293,89 @@ describe('story-first book analysis pipeline (offline)', () => {
     expect(await db.chapterSummaries.count()).toBe(2);
     expect(await db.plotEvents.count()).toBe(2);
     expect(new Set((await db.dialogues.toArray()).map(dialogue => dialogue.characterId)).size).toBe(1);
+  });
+
+  it('recovers an exact plot quote with a miscounted offset and omits an unsupported sibling before analyzing speech', async () => {
+    const quote = chapters[0].paragraphs[0];
+    const prefix = '🌧';
+    const first = { ...chapters[0], paragraphs: [prefix + quote] };
+    await seed([first]);
+    const unsupported = '林青与陌生人结盟。';
+    const calls = mockStory(undefined, plot => {
+      const [event] = plot.events;
+      const start = [...prefix].length;
+      return {
+        summary: `${plot.summary}${unsupported}`,
+        events: [
+          { ...event, evidence: { ...event.evidence, start, end: start + quote.length, text: quote } },
+          { ...event, description: unsupported, relation: unsupported,
+            evidence: { ...event.evidence, start: 0, end: unsupported.length, text: unsupported } },
+        ],
+      };
+    });
+
+    const result = await start({ pipeline: 'story-v1' }).done;
+    expect(result).toMatchObject({ status: 'done', completedPlotRequests: 1, completedChunks: 1 });
+    expect(result.chapters).toMatchObject([{ chapterId: first.id, plotWarnings: 1 }]);
+    expect(calls.map(call => call.protocol)).toEqual(['plot-v1', 'story-identity-v1']);
+    assertReservation(result, calls);
+    const saved = await db.plotEvents.toArray();
+    const evidence = { chapterId: first.id, paragraphIndex: 0, start: prefix.length, end: first.paragraphs[0].length, text: quote };
+    expect(saved).toMatchObject([{ chapterId: first.id, revisions: [{ description: '林青开口说话', evidence }] }]);
+    expect(await db.chapterSummaries.get(first.id)).toBeUndefined();
+    expect(await db.dialogues.where('chapterId').equals(first.id).count()).toBe(1);
+  });
+
+  it('advances past a plot window with no verifiable quotes and preserves the previous recap and events', async () => {
+    const [first] = chapters;
+    await seed([first]);
+    mockStory();
+    expect((await start({ pipeline: 'story-v1' }).done).status).toBe('done');
+    const previousRecap = await db.chapterSummaries.get(first.id);
+    const previousEvents = await db.plotEvents.toArray();
+    expect(previousRecap).toBeDefined();
+    expect(previousEvents).toHaveLength(1);
+
+    const text = '原文里没有这句话。';
+    const calls = mockStory(undefined, plot => ({ ...plot, summary: text, events: plot.events.map(event => ({ ...event,
+      evidence: { ...event.evidence, start: 0, end: text.length, text },
+    })) }));
+    const result = await start({ pipeline: 'story-v1' }).done;
+    expect(result).toMatchObject({ status: 'done', completedPlotRequests: 1, completedChunks: 1 });
+    expect(result.chapters).toMatchObject([{ chapterId: first.id, plotWarnings: 1 }]);
+    expect(await getBookAnalysisJob(result.id)).toEqual(result);
+    expect(calls.map(call => call.protocol)).toEqual(['plot-v1', 'story-identity-v1']);
+    expect(await db.chapterSummaries.get(first.id)).toEqual(previousRecap);
+    expect(await db.plotEvents.toArray()).toEqual(previousEvents);
+    assertReservation(result, calls);
+  });
+
+  it('keeps the prior checkpoint on a malformed envelope and retries only the unfinished chapter after renewed consent', async () => {
+    await seed();
+    let invalidOutput = true;
+    const calls = mockStory(undefined, (plot, chapter) => chapter === chapters[1].title && invalidOutput
+      ? { summary: 42, events: 'malformed-array' } : plot);
+
+    const failed = await start({ pipeline: 'story-v1' }).done;
+    expect(failed).toMatchObject({ status: 'failed', completedPlotRequests: 1, completedChunks: 1 });
+    expect(failed.error).toContain('剧情响应格式无效');
+    const prior = await db.chapterSummaries.get(chapters[0].id);
+    expect(prior).toBeDefined();
+    expect(await db.chapterSummaries.get(chapters[1].id)).toBeUndefined();
+    expect(await db.plotEvents.where('chapterId').equals(chapters[1].id).count()).toBe(0);
+    expect(await getBookAnalysisJob(failed.id)).toEqual(failed);
+    expect(calls).toHaveLength(3);
+    assertReservation(failed, calls);
+
+    await expect(start({ pipeline: 'story-v1', jobId: failed.id, authorized: false as true }).done).rejects.toThrow('授权');
+    expect(calls).toHaveLength(3);
+    invalidOutput = false;
+    const completed = await start({ pipeline: 'story-v1', jobId: failed.id }).done;
+    expect(completed).toMatchObject({ id: failed.id, status: 'done', completedPlotRequests: 2, completedChunks: 2 });
+    expect(completed.chapters.find(entry => entry.chapterId === chapters[1].id)?.error).toBeUndefined();
+    expect(calls.slice(3).map(call => [call.protocol, call.input.chapter])).toEqual([['plot-v1', '第二章'], ['story-identity-v1', '第二章']]);
+    expect(await db.chapterSummaries.get(chapters[0].id)).toEqual(prior);
+    assertReservation(completed, calls);
   });
 
   it('uses only the explicitly targeted chapter for recap regeneration', async () => {

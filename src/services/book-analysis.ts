@@ -15,7 +15,7 @@ import { boundedStoryManual, plotCost, plotWindows, storyAttributions, storyRequ
 import type { PlotWindow } from './book-story';
 import {
   STORY_IDENTITY_PROTOCOL, STORY_IDENTITY_SYSTEM_PROMPT, STORY_PLOT_PROTOCOL, STORY_PLOT_SYSTEM_PROMPT,
-  validStoryPlotInput, validStoryPlotOutput, validStorySpeechInput,
+  normalizeStoryPlotOutput, validStoryPlotInput, validStorySpeechInput,
 } from '../../supabase/functions/_shared/story-contract';
 import type { StoryPlotInput, StorySpeechInput } from '../../supabase/functions/_shared/story-contract';
 export type * from './book-analysis-types';
@@ -372,13 +372,18 @@ export function analyzeBook(options: BookAnalysisOptions): BookAnalysisControlle
         if (!validStoryPlotInput(input)) throw new BookAnalysisError('剧情分片超过安全边界，未发起请求。');
         const output = await performRequest(entry, STORY_PLOT_PROTOCOL, STORY_PLOT_SYSTEM_PROMPT, input,
           storyRequestCost(STORY_PLOT_SYSTEM_PROMPT, input, options.model));
-        if (!validStoryPlotOutput(output, input)) throw new BookAnalysisError('剧情输出缺少可核对的原文证据，当前分片未保存。');
-        const result = validatePlotOutput(output, original, window.context, known.map(person => person.id),
+        const normalized = normalizeStoryPlotOutput(output, input);
+        if (!normalized) throw new BookAnalysisError('剧情响应格式无效。已保存的进度和费用预留保留，继续需要重新授权。');
+        const result = validatePlotOutput(normalized.output, original, window.context, known.map(person => person.id),
           input.memory.flatMap(hint => hint.eventId ? [hint.eventId] : []));
+        const incomplete = normalized.incomplete || result.events.length !== normalized.output.events.length;
         assertWork();
         const nextJob = clone(job!);
         const nextEntry = nextJob.chapters.find(item => item.id === entry.id)!;
         nextEntry.completedPlotRequests = index + 1;
+        nextEntry.status = 'running';
+        nextEntry.error = undefined;
+        if (incomplete) nextEntry.plotWarnings = (nextEntry.plotWarnings ?? 0) + 1;
         nextJob.completedPlotRequests = nextJob.chapters.reduce((sum, item) => sum + (item.completedPlotRequests ?? 0), 0);
         nextJob.updatedAt = Date.now();
         const complete = index + 1 === entry.plotRequests && compareIdentityLocations(entry.scopeEnd, fullBoundary(original)) === 0;
@@ -391,7 +396,7 @@ export function analyzeBook(options: BookAnalysisOptions): BookAnalysisControlle
           await commitPlotWindow({
             chapter: original, output: result, windowId: `${id}:${entry.id}:${index}`,
             from: window.from, through: complete ? entry.scopeEnd : window.through, complete,
-            model: options.model, seriesId: membership?.seriesId,
+            model: options.model, seriesId: membership?.seriesId, preserveSummary: incomplete,
           });
           assertWork();
           await db.settings.put({ id: prefix + id, value: nextJob });
@@ -420,6 +425,7 @@ export function analyzeBook(options: BookAnalysisOptions): BookAnalysisControlle
         catch { throw new BookAnalysisError('对白编号、人物 ID 或原文证据不匹配，当前分片未保存。'); }
         assertWork();
         const nextJob = clone(job!); const nextEntry = nextJob.chapters.find(item => item.id === entry.id)!;
+        nextEntry.error = undefined;
         if (review) nextEntry.reviewCompleted = true; else { nextEntry.completedChunks = completedChunks; nextEntry.status = completedChunks === entry.totalChunks ? 'done' : 'running'; }
         nextJob.completedChunks = nextJob.chapters.reduce((sum, item) => sum + item.completedChunks, 0);
         nextJob.completedChapters = new Set(nextJob.chapters.filter(item => item.status === 'done').map(item => item.chapterId)).size;

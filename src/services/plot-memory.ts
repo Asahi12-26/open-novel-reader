@@ -80,10 +80,11 @@ interface PlotWindow {
   complete: boolean;
   model: string;
   seriesId?: string;
+  preserveSummary?: boolean;
 }
 
 /** Run inside the analysis transaction with its checkpoint, or atomically on its own. */
-export async function commitPlotWindow({ chapter, output, windowId, from, through, model, seriesId }: PlotWindow): Promise<void> {
+export async function commitPlotWindow({ chapter, output, windowId, from, through, model, seriesId, preserveSummary = false }: PlotWindow): Promise<void> {
   const write = async () => {
     const [currentBook, currentChapter, people, savedSummary] = await Promise.all([
       db.books.get(chapter.bookId), db.chapters.get(chapter.id), db.characters.where('bookId').equals(chapter.bookId).toArray(),
@@ -126,6 +127,9 @@ export async function commitPlotWindow({ chapter, output, windowId, from, throug
       if (!validatePlotEvent(next, allChapters, known)) throw new Error('剧情事件证据或人物编号无效，未保存。');
       records.push(next);
     }
+    if (records.length) await db.plotEvents.bulkPut(records);
+    // An incomplete response cannot replace a recap previously verified for this span.
+    if (preserveSummary) return;
     const evidence = output.events.map(event => event.evidence);
     const fragment: ChapterSummaryFragment = {
       id: windowId, from: position(from), through: position(through), text: output.summary, model, updatedAt: now,
@@ -135,7 +139,6 @@ export async function commitPlotWindow({ chapter, output, windowId, from, throug
       savedSummary && [savedSummary], [{ chapterId: chapter.id, bookId: chapter.bookId, fragments: [fragment], revisions: [] }],
     )[0];
     if (!validateChapterSummary(summary, allChapters, known)) throw new Error('本章简介证据或范围无效，未保存。');
-    if (records.length) await db.plotEvents.bulkPut(records);
     await db.chapterSummaries.put(summary);
   };
   if (Dexie.currentTransaction) await write();

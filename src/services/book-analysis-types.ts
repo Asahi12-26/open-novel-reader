@@ -14,6 +14,7 @@ export interface BookChapterTask {
   plotFrom?: IdentityLocation;
   plotRequests?: number;
   completedPlotRequests?: number;
+  plotWarnings?: number;
 }
 export interface BookAnalysisEstimate {
   chapterCount: number; totalChapters: number; dialogueCount: number; totalChunks: number;

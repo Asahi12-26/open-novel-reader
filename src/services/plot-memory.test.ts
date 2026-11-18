@@ -4,6 +4,7 @@ import { db } from '../core/db';
 import { bookAccountScope, bookOwnerKey } from '../core/book-owner';
 import type { PlotEventRecord } from '../core/plot-types';
 import type { Book, Chapter } from '../types';
+import { normalizeStoryPlotOutput } from '../../supabase/functions/_shared/story-contract';
 import { initializeCharacterIdentity, manualAddAlias } from './character-identity';
 import { addBookToSeries, createSeries, linkSeriesCharacters, removeBookFromSeries } from './series';
 import {
@@ -51,6 +52,22 @@ beforeEach(async () => {
 });
 
 describe('V0.6 plot evidence and independent reading summaries', () => {
+  it('repairs a unique quote in a sliced paragraph and leaves ambiguous or unsent quotes unverified', () => {
+    const quote = '林青抵岸。';
+    const context = [{ paragraph: 4, start: 100, text: `🌊${quote}` }];
+    const input = { chapter: '渡河', context, known: [], language: 'zh' as const, memory: [] };
+    const event = { description: '林青抵岸。', characters: [], kind: 'fact', confidence: .9,
+      evidence: { paragraphIndex: 4, start: 101, end: 101 + quote.length, text: quote } };
+    const response = { summary: '林青抵岸。', events: [event] };
+    expect(normalizeStoryPlotOutput(response, input)).toEqual({ incomplete: false, output: { ...response, events: [
+      { ...event, evidence: { ...event.evidence, start: 102, end: 102 + quote.length } },
+    ] } });
+    for (const excerpt of [`🌊${quote}${quote}`, '林青登上渡船。']) {
+      expect(normalizeStoryPlotOutput(response, { ...input, context: [{ ...context[0], text: excerpt }] }))
+        .toEqual({ incomplete: true, output: { summary: '', events: [] } });
+    }
+  });
+
   it('does not store text with fabricated or unsent evidence and retains characters’ claims as claims', async () => {
     const chapter = await seed();
     const proposed = { description: '孟禾说林青走了', kind: 'fact', characters: [], confidence: .9, evidence: evidence(chapter, 1) };
@@ -81,6 +98,18 @@ describe('V0.6 plot evidence and independent reading summaries', () => {
     expect(projectChapterSummary(revised, chapter, end)).toMatchObject({ text: '孟禾只是转述。', source: 'manual' });
     expect(projectChapterSummary(revised, chapter, early)).toMatchObject({ text: '船抵岸了。' });
     expect(mergeChapterSummaries([summary], [revised])).toEqual(mergeChapterSummaries([revised], [summary]));
+  });
+
+  it('shows a later verified recap after a skipped span while still marking it partial', async () => {
+    const chapter = await seed('book-recap-gap', ['船到了。', '孟禾等待。', '林青登船。']);
+    const gapStart = { ...start, offset: chapter.paragraphs[0].length };
+    const gapEnd = { ...start, paragraphIndex: 1, offset: chapter.paragraphs[1].length };
+    const end = chapterPlotEnd(chapter);
+    await commitPlotWindow({ chapter, windowId: 'first', output: output(chapter, 0, '船抵岸了。'), from: start, through: gapStart, complete: false, model });
+    await commitPlotWindow({ chapter, windowId: 'third', output: output(chapter, 2, '林青登船。'), from: gapEnd, through: end, complete: true, model });
+    const summary = (await db.chapterSummaries.get(chapter.id))!;
+    expect(projectChapterSummary(summary, chapter, gapEnd)).toMatchObject({ text: '船抵岸了。', complete: false });
+    expect(projectChapterSummary(summary, chapter, end)).toMatchObject({ text: '船抵岸了。\n\n林青登船。', complete: false });
   });
 
   it('keeps conflicting AI versions and prior evidence while prioritizing a user revision', async () => {

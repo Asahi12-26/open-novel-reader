@@ -49,6 +49,7 @@ export default function BookAnalysisPanel({ bookId, chapters, dialogues, getChar
   const sources = useQuery(() => summaryChapterId ? Promise.resolve([]) : listSeriesMemorySources(bookId, seriesAccess), [bookId, seriesAccess.origin, seriesAccess.userId, summaryChapterId], []);
   const saved = jobs.find(item => item.id === selectedId);
   const job = snapshot?.id === selectedId ? snapshot : saved;
+  const plotWarnings = job?.chapters.reduce((count, item) => count + (item.plotWarnings ?? 0), 0) ?? 0;
   const chaptersById = useMemo(() => new Map(chapters.map(chapter => [chapter.id, chapter])), [chapters]);
   const visibleDialogues = useMemo(() => minimized ? [] : dialogues.filter(item => {
     if (item.bookId !== bookId || item.verifiedQuote === false) return false;
@@ -106,7 +107,10 @@ export default function BookAnalysisPanel({ bookId, chapters, dialogues, getChar
       const result = await task.done;
       if (mounted.current) {
         setSelectedId(result.id); setSnapshot(result);
-        if (result.status === 'done') notify(summaryChapterId ? '本章简介更新完成。' : '整书分析完成，剧情与人物结果已保存。');
+        if (result.status === 'done') {
+          const incomplete = result.chapters.some(item => !!item.plotWarnings);
+          notify(incomplete ? '分析已结束。已保存可核对的结果，详情见任务进度。' : summaryChapterId ? '本章简介更新完成。' : '整书分析完成，剧情与人物结果已保存。');
+        }
       }
     } catch (failure) {
       if (mounted.current) setError(failure instanceof Error ? failure.message : '整书任务未能启动，已保存结果保留。');
@@ -176,6 +180,7 @@ export default function BookAnalysisPanel({ bookId, chapters, dialogues, getChar
       <progress aria-label="整书分析进度" max={Math.max(1, job.totalChunks)} value={job.completedChunks}/>
       <p>{job.completedChapters} / {job.chapters.length} 章节段 · {job.completedChunks} / {job.totalChunks} 分片 · {job.completedReviews} / {job.reviewRequests} 复核</p>
       {!!job.plotRequests && <p>剧情分片 {job.completedPlotRequests ?? 0} / {job.plotRequests}</p>}
+      {plotWarnings > 0 && <p className="inline-warning">{plotWarnings} 个剧情分片含无法从原文核对的内容，已略过这些内容。已有简介保留。</p>}
       <p className="fine-print">累计已预留 ${job.reservedUsd.toFixed(4)} / 总预算 ${job.budgetUsd.toFixed(4)}；包含失败请求与手动重试。</p>
       <p className="fine-print">当前任务已识别 {job.dialogueCount} 句对白 · {job.characterCount} 名人物 · {job.unknownCount} 句未知或待确认。</p>
       {job.status === 'waiting' && working && <p className="inline-warning">已追上当前阅读位置，正在等待阅读推进。点击「返回阅读并继续任务」即可翻页；不会发送未来内容。</p>}
