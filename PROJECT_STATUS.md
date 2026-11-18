@@ -2,10 +2,15 @@
 
 ## V0.6.1 本地优先与私人云
 
+- `v0.6.1-beta.1` 已发布，标签指向 `26cb365`。Windows 和 Android 发布构建及 Web 标签检查通过，四个公开附件的 SHA256 一致。Android 沿用固定证书和应用标识，版本号 6011。 [Beta 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.6.1-beta.1) · [原生构建](https://github.com/Asahi12-26/open-novel-reader/actions/runs/44240454203) · [标签检查](https://github.com/Asahi12-26/open-novel-reader/actions/runs/44240454235)
+
 - 默认从本地书架开始。访客可保存和管理人物、头像、系列、剧情、阅读位置与人工纠错。沿用 IndexedDB 版本 3，单章和整书任务的原设备账本保留。 [使用与升级](docs/V061_LOCAL_FIRST.md)
 - 新增跨平台 ZIP 导出、合并和本地替换。旧 JSON 仍可合并。替换前校验安全备份并确认，验证或事务失败时保留现有数据。 [备份与恢复](docs/V061_LOCAL_FIRST.md#完整备份与恢复)
-- 托管 Auth 已关闭新注册及匿名登录。现有唯一库主 UID 已加入服务端白名单，SQL 验证该账号仍可读原记录、设置和 Storage。另一真实数据库角色的跨账号访问和未获准上传均被拒绝，测试事务全部回滚。旧版代理第 4 版按同一白名单鉴权，并通过线上匿名拒绝验证。 [权限与配置](docs/CLOUD_SETUP.md)
+- 托管 Auth 已关闭新注册及匿名登录。现有唯一库主 UID 已加入服务端白名单。SQL 使用现有库主的角色验证原记录、设置和 Storage 可读，并以合成测试身份验证跨账号读取和未获准上传被拒绝。测试事务全部回滚。旧版代理第 4 版按同一白名单鉴权，并通过线上匿名拒绝验证。 [权限与配置](docs/CLOUD_SETUP.md)
 - 三端直连 DeepSeek，普通用户无需登录。官方接口返回在线版、HTTPS WebView 与 Tauri 方案来源所需的 CORS 响应。现有逐章与整书用模拟请求回归，真实收费生成次数为 0。 [独立 AI 使用说明](docs/V061_LOCAL_FIRST.md#配置自己的-deepseek-api-key)
+- 185 项本地测试和 17 项浏览器流程通过。线上 PWA 验证访客导入和离线重开。Windows 和线上 PWA 均成功读取仅查询模型目录的无效测试 Key 鉴权响应。
+- Windows 运行公开安装包内的可执行程序，核对了 V0.6 升级后 17 张测试数据表和精确阅读位置，并在全新档案恢复 ZIP。相同提交的 Windows 候选构建已通过系统另存为对话框导出 ZIP，并核对原始小说字节。
+- 尚待补测 Android 真机覆盖安装、系统文件选择器与实际读写，以及现有库主两台真实设备之间的新版同步。真实收费模型质量未纳入本轮验收。
 
 ## V0.6 剧情理解与系列记忆
 
