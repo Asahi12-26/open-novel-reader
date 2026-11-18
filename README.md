@@ -6,16 +6,16 @@
 
 ## 当前版本与下载
 
-**V0.6.1-beta.1** 默认使用本地书库，加入 ZIP 备份恢复和独立 DeepSeek 直连。Android versionCode 为 6011。 [新版安装、备份与 AI 指南](docs/V061_LOCAL_FIRST.md)
+**V0.6.1-beta.2** 修复剧情分析因引文位置偏差停住的问题。Android versionCode 为 6012。 [新版安装、备份与 AI 指南](docs/V061_LOCAL_FIRST.md)
 
 | 平台 | 本轮状态 | 使用入口 |
 | --- | --- | --- |
 | Web / PWA | 在线版 | [在线使用](https://asahi12-26.github.io/open-novel-reader/) |
-| Windows x64 | 安装包未配置发布者签名 | [下载 EXE](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.6.1-beta.1/Open-Novel-Reader_0.6.1-beta.1_windows-x64-setup.exe) |
-| Android ARM64 | 复用固定发布证书 | [下载 APK](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.6.1-beta.1/Open-Novel-Reader_0.6.1-beta.1_android-arm64.apk) |
+| Windows x64 | 安装包未配置发布者签名 | [下载 EXE](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.6.1-beta.2/Open-Novel-Reader_0.6.1-beta.2_windows-x64-setup.exe) |
+| Android ARM64 | 复用固定发布证书 | [下载 APK](https://github.com/Asahi12-26/open-novel-reader/releases/download/v0.6.1-beta.2/Open-Novel-Reader_0.6.1-beta.2_android-arm64.apk) |
 | iOS | 保留共享架构，尚无 IPA 构建 | 需要 macOS 和签名条件 |
 
-发布附件含校验文件和第三方许可。Android 0.2 起沿用固定发布证书，可覆盖安装。仍在使用 Android 0.1 开发签名版的用户，先在旧版导出书库，再安装新版并恢复。 [使用指南](docs/USAGE.md) · [V0.6.1 Beta 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.6.1-beta.1)
+发布附件含校验文件和第三方许可。Android 0.2 起沿用固定发布证书，可覆盖安装。仍在使用 Android 0.1 开发签名版的用户，先在旧版导出书库，再安装新版并恢复。 [使用指南](docs/USAGE.md) · [V0.6.1 Beta 2 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.6.1-beta.2)
 
 ## 现在可以用什么
 

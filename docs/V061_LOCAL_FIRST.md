@@ -3,8 +3,8 @@
 ## 安装与更新
 
 - Windows x64 运行发布页中的 EXE。安装包内使用 WebView2。Windows 安装包未做 Authenticode 发布者签名。
-- Android 使用 ARM64 APK，最低 Android 8。V0.6.1 Beta 1 的应用 ID 仍为 `io.github.opennovelreader.app`，版本号 6011。0.2 及以后使用同一发布证书的版本可覆盖安装。0.1 开发签名不同，从该版本换装前先导出并核对书库备份。
-- Web / PWA 首次联网打开，应用缓存完成后可断网重开。浏览器菜单提供安装入口。各平台各自保存本地书库。 [在线版](https://asahi12-26.github.io/open-novel-reader/) · [候选版本发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.6.1-beta.1)
+- Android 使用 ARM64 APK，最低 Android 8。V0.6.1 Beta 2 的应用 ID 为 `io.github.opennovelreader.app`，版本号 6012。0.2 及以后使用同一发布证书的版本可覆盖安装。0.1 开发签名不同，从该版本换装前先导出并核对书库备份。
+- Web / PWA 首次联网打开，应用缓存完成后可断网重开。浏览器菜单提供安装入口。各平台各自保存本地书库。 [在线版](https://asahi12-26.github.io/open-novel-reader/) · [Beta 2 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.6.1-beta.2)
 
 从 V0.6 升级沿用原 IndexedDB 名称、Dexie 版本 3、书籍和人物 ID。保留正在使用的浏览器资料、应用数据和 Android 安装，升级后的正文、头像、人物、系列、剧情和旧任务可继续读取。
 

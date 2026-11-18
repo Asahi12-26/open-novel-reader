@@ -2,6 +2,8 @@
 
 ## V0.6.1 本地优先与私人云
 
+- `v0.6.1-beta.2` 已发布，标签指向 `71ad906`，包含剧情证据定位和续跑修复 `c8633e3`。190 项本地测试通过。重新下载并核对了四个公开附件的 SHA256、Windows 程序版本，以及 Android ARM64 APK 的包名、固定签名与版本号 6012。升级核对基于发布包元数据和签名。 [Beta 2 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.6.1-beta.2) · [原生构建](https://github.com/Asahi12-26/open-novel-reader/actions/runs/44369967547)
+
 - `v0.6.1-beta.1` 已发布，标签指向 `26cb365`。Windows 和 Android 发布构建及 Web 标签检查通过，四个公开附件的 SHA256 一致。Android 沿用固定证书和应用标识，版本号 6011。 [Beta 发布页](https://github.com/Asahi12-26/open-novel-reader/releases/tag/v0.6.1-beta.1) · [原生构建](https://github.com/Asahi12-26/open-novel-reader/actions/runs/44240454203) · [标签检查](https://github.com/Asahi12-26/open-novel-reader/actions/runs/44240454235)
 
 - 默认从本地书架开始。访客可保存和管理人物、头像、系列、剧情、阅读位置与人工纠错。沿用 IndexedDB 版本 3，单章和整书任务的原设备账本保留。 [使用与升级](docs/V061_LOCAL_FIRST.md)
